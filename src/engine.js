@@ -1,6 +1,7 @@
 const MODES = new Set(['strict', 'replace', 'fallback', 'append', 'off']);
 const DEFAULT_EXCLUDED_MODELS = ['*nmem*', '*embedding*', '*rerank*'];
-const STOP_ANCHOR = String.raw`(?:\n(?=[A-Z][A-Z0-9 _-]{2,}(?::|\s+[\u2014–-]\s+)|#{1,3}\s|<[a-zA-Z_][\w-]*>|\[Context:)|$)`;
+const ALMA_NEXT_SECTION = String.raw`(?=\n(?:PERSONALITY:|EMOTION SYSTEM\s+[\u2014:-]|FATIGUE SYSTEM:|SELFIE ALBUM\s+[\u2014:-]|SYSTEM INFO\s+-|WORKING DIRECTORY\s+-|ARTIFACT SIDEBAR\s+-|THREAD ID\s+-|OUTPUTS CONVENTION\s+-|DATE AWARENESS|USER PROFILE|GLOBAL CONFIG DIRECTORY|PEOPLE PROFILE FORMAT|SKILLS FIRST|ALMA CLI|AGENTIC EXECUTION|COMMITMENT ENFORCEMENT|PROGRESS REPORTING|DELEGATION STAYS IN THE TURN|PROACTIVE UPDATES|WORKSPACE HYGIENE|ACCEPTANCE ON THE TASK|LAND THE ANSWER EARLY|SELF-EVOLUTION|AGENT DELEGATION|DEEP LINKS|WEB LINKS|INFOGRAPHIC VISUALIZATION|LIVE CODING MUSIC|TODAY'S TIME-CLUE REFERENCES|TOOL DISCOVERY|MANAGED AGENT CREW|READ-ONLY AUTHORITY|<[a-zA-Z_][\w-]*>|#{1,3}\s)|$)`;
+const ALMA_CONTEXT_SECTION_END = String.raw`(?=\]\s*(?:\n|$)|\n(?:EMOTION SYSTEM|FATIGUE SYSTEM|SELFIE ALBUM|Relevant Memories|## Relevant Memories|<[a-zA-Z_][\w-]*>)|$)`;
 
 export const ACTIVE_PURGE_MODES = [...MODES].filter((mode) => mode !== 'off');
 export const BUILTIN_PERSONA = {
@@ -138,7 +139,7 @@ export function parseUserTurnDirective(rawTurnText, knownPersonaIds = []) {
 export function reduceThreadDirectives(userTurns, knownPersonaIds = []) {
   const state = { enabled: true, mode: null, personaId: null, once: false };
   const turns = Array.isArray(userTurns) ? userTurns : [];
-  const parsed = turns.map((turn) => {
+  const parsed = turns.map((turn, index) => {
     const result = parseUserTurnDirective(turn, knownPersonaIds);
     if (!result.matched) return result;
     if (result.command === 'on') {
@@ -148,11 +149,8 @@ export function reduceThreadDirectives(userTurns, knownPersonaIds = []) {
     } else if (result.command === 'off') {
       state.enabled = false;
       state.mode = 'off';
-    } else {
+    } else if (index === turns.length - 1) {
       state.once = true;
-      state.enabled = true;
-      state.mode = result.mode || state.mode;
-      state.personaId = result.personaId || state.personaId;
     }
     return result;
   });
@@ -195,10 +193,13 @@ export function scrubAlmaUserContext(rawTurnText) {
   const contextStart = text.indexOf('[Context:');
   if (contextStart < 0 || contextStart > sentAt) return rawTurnText;
   const prefix = text.slice(0, sentAt);
-  const context = prefix.slice(contextStart)
-    .replace(/(EMOTION SYSTEM\s*[\u2014:-][\s\S]*?)(?=\n[A-Z][A-Z0-9 _-]{2,}(?::|\s+[\u2014–-]\s+)|\n<[a-zA-Z_][\w-]*>|$)/i, '')
-    .replace(/(FATIGUE SYSTEM\s*:[\s\S]*?)(?=\n[A-Z][A-Z0-9 _-]{2,}(?::|\s+[\u2014–-]\s+)|\n<[a-zA-Z_][\w-]*>|$)/i, '')
-    .replace(/(SELFIE ALBUM\s*[\u2014:-][\s\S]*?)(?=\n[A-Z][A-Z0-9 _-]{2,}(?::|\s+[\u2014–-]\s+)|\n<[a-zA-Z_][\w-]*>|$)/i, '');
+  const rawContext = prefix.slice(contextStart);
+  const hadClosingBracket = /]\s*$/.test(rawContext);
+  let context = rawContext
+    .replace(new RegExp(`EMOTION SYSTEM\\s*[\\u2014:-][\\s\\S]*?${ALMA_CONTEXT_SECTION_END}`), '')
+    .replace(new RegExp(`FATIGUE SYSTEM\\s*:[\\s\\S]*?${ALMA_CONTEXT_SECTION_END}`), '')
+    .replace(new RegExp(`SELFIE ALBUM\\s*[\\u2014:-][\\s\\S]*?${ALMA_CONTEXT_SECTION_END}`), '');
+  if (hadClosingBracket && !/]\s*$/.test(context)) context = `${context.trimEnd()}]`;
   return `${prefix.slice(0, contextStart)}${context}${text.slice(sentAt)}`;
 }
 
@@ -206,12 +207,12 @@ export function scrubHostSystemPrompt(text, hostFamily = 'generic') {
   let result = string(text);
   if (hostFamily === 'alma') {
     result = result
-      .replace(/^You are[^\n]*\bAlma\b[\s\S]*?(?=\n(?:PERSONALITY:|SYSTEM INFO|WORKING DIRECTORY|[A-Z][A-Z0-9 _-]{2,}(?::|\s+[\u2014–-]\s+)|<|$))/im, '')
-      .replace(new RegExp(`PERSONALITY\\s*:[\\s\\S]*?${STOP_ANCHOR}`, 'i'), '\n')
-      .replace(new RegExp(`EMOTION SYSTEM\\s*[\\u2014:-][\\s\\S]*?${STOP_ANCHOR}`, 'i'), '\n')
-      .replace(new RegExp(`FATIGUE SYSTEM\\s*:[\\s\\S]*?${STOP_ANCHOR}`, 'i'), '\n')
-      .replace(new RegExp(`SELFIE ALBUM\\s*[\\u2014:-][\\s\\S]*?${STOP_ANCHOR}`, 'i'), '\n')
-      .replace(/<notification_protocol>[\s\S]*?<\/notification_protocol>/gi, '');
+      .replace(/^You are[^\n]*\bAlma\b[\s\S]*?(?=\n(?:PERSONALITY:|SYSTEM INFO|WORKING DIRECTORY|<[a-zA-Z_][\w-]*>)|$)/, '')
+      .replace(new RegExp(`PERSONALITY\\s*:[\\s\\S]*?${ALMA_NEXT_SECTION}`), '\n')
+      .replace(new RegExp(`EMOTION SYSTEM\\s*[\\u2014:-][\\s\\S]*?${ALMA_NEXT_SECTION}`), '\n')
+      .replace(new RegExp(`FATIGUE SYSTEM\\s*:[\\s\\S]*?${ALMA_NEXT_SECTION}`), '\n')
+      .replace(new RegExp(`SELFIE ALBUM\\s*[\\u2014:-][\\s\\S]*?${ALMA_NEXT_SECTION}`), '\n')
+      .replace(/<notification_protocol>[\s\S]*?<\/notification_protocol>/g, '');
   } else if (hostFamily === 'pi') {
     result = result.replace(/^You are (?:a coding assistant running inside pi|an expert coding assistant operating inside pi)[^\n]*[\s\S]*?(?=\n(?:<docs>|$))/im, '').replace(/^You are an? \S[^\n]{0,160}?coding agent harness\.[^\n]*\n?/im, '').replace(/<docs>[\s\S]*?<\/docs>/gi, '');
   } else {
@@ -245,7 +246,7 @@ export function decidePurgeAction(envelope = {}, rawOptions = {}, resolvedPerson
     mode: active && MODES.has(mode) ? (mode === 'fallback' ? ((personaId === BUILTIN_PERSONA.id && !resolvedPersonaMap[personaId]?.template && !config.personas.some((item) => item.id === personaId && (item.template || item.filePath))) || !(personaMap(config, resolvedPersonaMap)[personaId]?.template || '').trim() ? 'off' : 'replace') : mode) : 'off',
     personaId: active ? personaId : null,
     keepCwd,
-    reason: latest.matched ? `directive-${latest.command}` : rule ? 'rule' : 'default',
+    reason: latest.matched ? `directive-${latest.command}` : !active ? 'directive-off' : rule ? 'rule' : 'default',
     userText: latest.text,
     directive: latest,
     persona: personaMap(config, resolvedPersonaMap)[personaId] || BUILTIN_PERSONA

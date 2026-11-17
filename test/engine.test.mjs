@@ -30,6 +30,18 @@ test('reduces sticky directives and keeps once scoped to one request', () => {
   assert.equal(result.state.mode, 'replace');
   assert.equal(result.state.once, false);
   assert.equal(result.turns[1].text, 'continue');
+
+  const scoped = reduceThreadDirectives(['/purge off', '/purge once builtin-example strict inspect', 'follow up'], ['builtin-example']);
+  assert.equal(scoped.state.enabled, false);
+  assert.equal(scoped.state.mode, 'off');
+  assert.equal(scoped.state.personaId, null);
+  assert.equal(scoped.state.once, false);
+
+  const afterOnce = decidePurgeAction({
+    userText: 'follow up',
+    userTurns: ['/purge once strict inspect', 'follow up']
+  }, { defaultMode: 'off' });
+  assert.equal(afterOnce.mode, 'off');
 });
 
 test('replaces bare directives with a non-empty acknowledgement request', () => {
@@ -91,6 +103,43 @@ test('scrubs persona content while preserving Alma operational sections', () => 
   assert.equal(scrubAlmaUserContext(almaTurn('hello')).includes('EMOTION SYSTEM'), false);
 });
 
+test('scrubs Alma state sections without consuming operational boundaries or context closure', () => {
+  const system = [
+    'You are Alma, the personal assistant.',
+    'PERSONALITY:',
+    'remove personality',
+    'Intensity: high',
+    'EMOTION SYSTEM — remove emotion',
+    'Energy: 90%',
+    'Current state:',
+    'FATIGUE SYSTEM:',
+    'IMPORTANT: remove fatigue',
+    'SELFIE ALBUM — remove selfies',
+    'HOW TO USE: remove album instructions',
+    'SYSTEM INFO - keep system info',
+    'WORKING DIRECTORY - keep working directory',
+    '<available_skills>keep skills</available_skills>'
+  ].join('\n');
+  const clean = scrubHostSystemPrompt(system, 'alma');
+  assert.equal(clean.includes('PERSONALITY:'), false);
+  assert.equal(clean.includes('EMOTION SYSTEM'), false);
+  assert.equal(clean.includes('FATIGUE SYSTEM:'), false);
+  assert.equal(clean.includes('SELFIE ALBUM'), false);
+  assert.equal(clean.includes('Intensity: high'), false);
+  assert.equal(clean.includes('Energy: 90%'), false);
+  assert.equal(clean.includes('Current state:'), false);
+  assert.equal(clean.includes('IMPORTANT:'), false);
+  assert.equal(clean.includes('HOW TO USE:'), false);
+  assert.equal(clean.includes('SYSTEM INFO - keep system info'), true);
+  assert.equal(clean.includes('WORKING DIRECTORY - keep working directory'), true);
+  assert.equal(clean.includes('<available_skills>keep skills</available_skills>'), true);
+
+  const context = '[Context: reminder\nSELFIE ALBUM — private album\nHOW TO USE: private instructions][Message sent-at: now]hello';
+  const scrubbed = scrubAlmaUserContext(context);
+  assert.equal(scrubbed.includes('SELFIE ALBUM'), false);
+  assert.equal(scrubbed.includes('HOW TO USE:'), false);
+  assert.equal(scrubbed.includes('][Message sent-at:'), true);
+});
 test('interpolates and removes an absent cwd placeholder', () => {
   assert.equal(interpolatePersona('A {{cwd}} B', '/tmp/x'), 'A /tmp/x B');
   assert.equal(interpolatePersona('A {{cwd}} B', ''), 'A\nB');

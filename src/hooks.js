@@ -1,11 +1,13 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import {
+  BUILTIN_PERSONA,
   decidePurgeAction,
   detectHostFamily,
   extractWorkspaceCwd,
   interpolatePersona,
   parsePurgeConfig,
+  parseUserTurnDirective,
   scrubAlmaUserContext,
   scrubHostSystemPrompt
 } from './engine.js';
@@ -69,18 +71,29 @@ function messageText(message, protocol) {
 }
 
 function isTextPart(part) {
-  return typeof part === 'string' || part?.type === 'text' || part?.type === 'input_text' || (!part?.type && typeof part?.text === 'string' && !part.inlineData && !part.image_url && !part.file_data);
+  if (typeof part === 'string') return true;
+  if (!part || typeof part !== 'object' || part.type === 'image_url' || part.type === 'image' || part.type === 'input_image' || part.inlineData || part.file_data || part.image_url) return false;
+  return part.type === 'text' || part.type === 'input_text' || (!part.type && typeof part.text === 'string');
 }
 
-function transformMessageText(message, transform, protocol) {
+function partText(part) {
+  return typeof part === 'string' ? part : text(part?.text);
+}
+
+function transformMessageText(message, transform, protocol, shouldTransform = null) {
   const copy = { ...message };
-  const key = protocol === 'gemini' ? 'parts' : Array.isArray(message.content) ? 'content' : 'content';
-  const value = protocol === 'gemini' ? message.parts : message.content;
+  const key = protocol === 'gemini' ? 'parts' : message.content !== undefined ? 'content' : message.input !== undefined ? 'input' : 'text';
+  const value = message[key];
   if (Array.isArray(value)) {
     const indexes = value.map((part, index) => isTextPart(part) ? index : -1).filter((index) => index >= 0);
     if (!indexes.length) return copy;
-    const index = indexes.find((candidate) => messageText(message, protocol).includes(text(value[candidate]?.text || value[candidate]))) ?? indexes.at(-1);
-    copy[key] = value.map((part, candidate) => candidate === index ? (typeof part === 'string' ? transform(part) : { ...part, text: transform(part.text) }) : part);
+    const selected = shouldTransform
+      ? indexes.filter((index) => shouldTransform(partText(value[index])))
+      : [indexes.find((index) => messageText(message, protocol).includes(partText(value[index]))) ?? indexes.at(-1)];
+    const targets = selected.length ? new Set(selected) : new Set([indexes.at(-1)]);
+    copy[key] = value.map((part, index) => targets.has(index)
+      ? (typeof part === 'string' ? transform(part) : { ...part, text: transform(part.text) })
+      : part);
     return copy;
   }
   if (typeof value === 'string') copy[key] = transform(value);
@@ -90,7 +103,30 @@ function transformMessageText(message, transform, protocol) {
 function mapUserMessages(body, protocol, transform) {
   const key = protocol === 'gemini' ? 'contents' : Array.isArray(body.messages) ? 'messages' : 'input';
   if (!Array.isArray(body[key])) return body;
-  const copy = { ...body, [key]: body[key].map((item) => ['user', 'human'].includes(text(item?.role || item?.speaker).toLowerCase()) && messageText(item, protocol).includes('[Context:') ? transformMessageText(item, transform, protocol) : item) };
+  const copy = { ...body, [key]: body[key].map((item) => {
+    if (!['user', 'human'].includes(text(item?.role || item?.speaker).toLowerCase()) || !messageText(item, protocol).includes('[Context:')) return item;
+    return transformMessageText(item, transform, protocol, (value) => value.includes('[Context:'));
+  }) };
+  return copy;
+}
+
+function replaceLatestUser(body, protocol, userText, knownPersonaIds) {
+  const key = protocol === 'gemini' ? 'contents' : Array.isArray(body.messages) ? 'messages' : 'input';
+  if (!Array.isArray(body[key])) return body;
+  const indexes = body[key].map((item, index) => ['user', 'human'].includes(text(item?.role || item?.speaker).toLowerCase()) ? index : -1).filter((index) => index >= 0);
+  const index = indexes.at(-1);
+  if (index === undefined) return body;
+  const message = body[key][index];
+  const copy = { ...body, [key]: [...body[key]] };
+  copy[key][index] = transformMessageText(
+    message,
+    (value) => {
+      const parsed = parseUserTurnDirective(value, knownPersonaIds);
+      return parsed.matched ? parsed.text : userText;
+    },
+    protocol,
+    (value) => parseUserTurnDirective(value, knownPersonaIds).matched
+  );
   return copy;
 }
 
@@ -141,11 +177,11 @@ function replaceSystem(body, protocol, persona, mode, renderedPersona, host) {
       const next = `${renderedPersona}\n\n${scrubbed}`.trim();
       if (hasInstructions) {
         copy.instructions = next;
-        copy.input = input.map((item) => indexes.includes(input.indexOf(item)) ? transformMessageText(item, (value) => mode === 'replace' ? scrubHostSystemPrompt(value, host) : value, protocol) : item);
+        copy.input = input.map((item, index) => indexes.includes(index) ? transformMessageText(item, (value) => mode === 'replace' ? scrubHostSystemPrompt(value, host) : value, protocol) : item);
       } else if (first) {
         copy.input = input.map((item, index) => {
           if (!indexes.includes(index)) return item;
-          const value = index === indexes[0] ? next : scrubHostSystemPrompt(contentText(item.content), host);
+          const value = index === indexes[0] ? next : (mode === 'replace' ? scrubHostSystemPrompt(contentText(item.content), host) : contentText(item.content));
           return transformMessageText(item, () => value, protocol);
         });
       } else copy.instructions = renderedPersona;
@@ -154,7 +190,11 @@ function replaceSystem(body, protocol, persona, mode, renderedPersona, host) {
   }
   if (protocol === 'anthropic') {
     const blocks = Array.isArray(body.system) ? body.system : body.system ? [{ type: 'text', text: body.system }] : [];
-    const nextBlocks = mode === 'strict' ? [{ type: 'text', text: renderedPersona }] : mode === 'replace' ? [{ type: 'text', text: renderedPersona }, ...blocks.map((block) => ({ ...block, text: scrubHostSystemPrompt(text(block.text), host) }))] : [{ type: 'text', text: renderedPersona }, ...blocks.map((block) => ({ ...block }))];
+    const nextBlocks = mode === 'strict'
+      ? [{ type: 'text', text: renderedPersona }]
+      : mode === 'replace'
+        ? [{ type: 'text', text: renderedPersona }, ...blocks.map((block) => ({ ...block, text: scrubHostSystemPrompt(text(block.text), host) })).filter((block) => block.text.trim() !== '')]
+        : [{ type: 'text', text: renderedPersona }, ...blocks.map((block) => ({ ...block }))];
     copy.system = nextBlocks;
     return copy;
   }
@@ -251,11 +291,14 @@ export function onRequest(body, ctx = {}) {
     const result = cloneBody(source);
     const before = immutableSnapshot(source);
     const config = parsePurgeConfig(ctx.options || {});
-    const action = decidePurgeAction(envelopeFor(result, protocol, ctx), config, loadPersonas(config));
+    const envelope = envelopeFor(result, protocol, ctx);
+    const resolvedPersonas = loadPersonas(config);
+    const action = decidePurgeAction(envelope, config, resolvedPersonas);
+    const knownPersonaIds = [...new Set([BUILTIN_PERSONA.id, ...Object.keys(resolvedPersonas)])];
     let next = result;
     let reportBytes = 0;
+    if (action.userText !== envelope.userText) next = replaceLatestUser(next, protocol, action.userText, knownPersonaIds);
     if (action.mode !== 'off' && action.persona) {
-      const envelope = envelopeFor(result, protocol, ctx);
       const cwd = action.keepCwd ? envelope.cwd : '';
       const template = action.persona.template || '';
       let personaText = interpolatePersona(template, cwd);
@@ -274,7 +317,7 @@ export function onRequest(body, ctx = {}) {
     const sourceSerialized = JSON.stringify(source);
     const resultSerialized = JSON.stringify(next);
     const changed = sourceSerialized !== resultSerialized;
-    if (changed) rememberOriginal(identityKey(next, protocol, agent), source, Buffer.byteLength(sourceSerialized));
+    if (changed) rememberOriginal(`${protocol}:${agent}:${resultSerialized}`, source, Buffer.byteLength(sourceSerialized));
     report(ctx, changed ? 'ready' : 'skipped', changed ? reportBytes : 0);
     return changed ? next : undefined;
   } catch {

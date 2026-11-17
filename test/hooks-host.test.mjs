@@ -61,6 +61,48 @@ test('scrubs each system block and every Alma user context without changing imag
   assert.equal(result.messages[3].content[0].text.includes('FATIGUE SYSTEM'), false);
 });
 
+
+test('strips every purge directive on the wire across protocols and preserves multimodal parts', () => {
+  const directives = ['/purge on', '/purge off', '/purge once replace describe it', '@purge replace describe it'];
+  const makeBody = (protocol, directive) => {
+    const user = protocol === 'gemini'
+      ? { role: 'user', parts: [{ inlineData: { mimeType: 'image/png', data: 'abc' } }, { text: directive }] }
+      : { role: 'user', content: [{ type: 'image_url', image_url: { url: 'data:image/png;base64,abc' } }, { type: 'text', text: directive }] };
+    if (protocol === 'chat') return { model: 'gpt', messages: [user] };
+    if (protocol === 'responses') return { model: 'gpt', input: [user] };
+    if (protocol === 'anthropic') return { model: 'claude', system: [], messages: [user] };
+    return { model: 'gemini', system_instruction: { parts: [] }, contents: [user] };
+  };
+  for (const protocol of ['chat', 'responses', 'anthropic', 'gemini']) {
+    for (const directive of directives) {
+      const result = onRequest(makeBody(protocol, directive), context(protocol, { options: { ...options, defaultMode: 'strict' } }));
+      const user = protocol === 'gemini'
+        ? result.contents.find((item) => item.role === 'user')
+        : (protocol === 'responses' ? result.input.find((item) => item.role === 'user') : result.messages.find((item) => item.role === 'user'));
+      const parts = protocol === 'gemini' ? user.parts : user.content;
+      assert.equal(parts[0].inlineData?.data || parts[0].image_url?.url, protocol === 'gemini' ? 'abc' : 'data:image/png;base64,abc');
+      assert.equal(parts[1].text.includes('/purge') || parts[1].text.includes('@purge'), false, `${protocol} ${directive}`);
+    }
+  }
+
+  const body = { model: 'gpt', messages: [{ role: 'user', content: [
+    { type: 'image_url', image_url: { url: 'data:image/png;base64,abc' } },
+    { type: 'text', text: 'Part 1 note' },
+    { type: 'text', text: '[Context: private][Message sent-at: now] /purge once replace describe it' }
+  ] }] };
+  const result = onRequest(body, context('chat', { options: { ...options, defaultMode: 'strict' } }));
+  const userMessage = result.messages.find((item) => item.role === 'user');
+  assert.equal(userMessage.content[0].image_url.url, 'data:image/png;base64,abc');
+  assert.equal(userMessage.content[1].text, 'Part 1 note');
+  assert.equal(userMessage.content[2].text.includes('/purge'), false);
+  assert.equal(userMessage.content[2].text.includes('Part 1 note'), false);
+});
+
+test('filters empty Anthropic blocks after Alma replace scrubbing', () => {
+  const body = { model: 'claude', system: [{ type: 'text', text: 'PERSONALITY: remove all' }, { type: 'text', text: 'keep this' }], messages: [{ role: 'user', content: 'hello' }] };
+  const result = onRequest(body, context('anthropic', { options: { ...options, defaultMode: 'replace' } }));
+  assert.equal(result.system.some((block) => block.text === ''), false);
+});
 test('keeps all seven immutable wire values structurally unchanged', () => {
   const body = { model: 'gpt', tools: [{ name: 'tool' }], tool_choice: { type: 'auto' }, function_call: { name: 'f' }, functions: [{ name: 'f' }], toolConfig: { mode: 'AUTO' }, stream: true, config: { tools: [{ name: 'nested' }], toolConfig: { mode: 'ANY' } }, messages: [{ role: 'user', content: 'hello' }] };
   const result = onRequest(body, context('chat'));
@@ -98,4 +140,63 @@ test('fails open for malformed input and clamps safe Magpie reports', () => {
   onRequest(oversized, { protocol: 'chat', options: { ...options, defaultMode: 'strict' }, report: (code, bytes) => reports.push({ code, bytes }) });
   assert.deepEqual(reports.slice(0, 2), ['empty', 'unavailable']);
   assert.ok(reports[2].bytes <= 32768);
+});
+
+test('rewrites Alma Responses directives on the wire and protects auxiliary calls', () => {
+  const safeOpts = { defaultMode: 'off', defaultPersonaId: 'persona', personas: [{ id: 'persona', template: 'Be concise. cwd={{cwd}}' }] };
+  const almaSys = 'You are Alma.\nPERSONALITY: Warm.\nEMOTION SYSTEM — happy\nWORKING DIRECTORY - Your working directory for this conversation is: /repo/app';
+  const reqOnce = {
+    model: 'claude-sonnet-4-6',
+    input: [
+      { role: 'system', content: [{ type: 'input_text', text: almaSys }] },
+      { role: 'user', content: [{ type: 'input_text', text: '[Context: EMOTION SYSTEM — calm][Message sent-at: 2026-11-17T12:00:00Z]' }, { type: 'input_text', text: '/purge once strict Review this' }] }
+    ]
+  };
+  const onceResult = onRequest(reqOnce, { protocol: 'responses', agent: 'alma', options: safeOpts });
+  assert.equal(onceResult.input[0].content[0].text, 'Be concise. cwd=/repo/app');
+  assert.equal(onceResult.input[1].content[0].text, '[Context: ][Message sent-at: 2026-11-17T12:00:00Z]');
+  assert.equal(onceResult.input[1].content[1].text, 'Review this');
+
+  const reqOn = {
+    model: 'claude-sonnet-4-6',
+    input: [
+      { role: 'system', content: [{ type: 'input_text', text: almaSys }] },
+      { role: 'user', content: [{ type: 'input_text', text: '[Context: EMOTION SYSTEM — calm][Message sent-at: 2026-11-17T12:00:00Z]\n/purge on persona replace' }] }
+    ]
+  };
+  const onResult = onRequest(reqOn, { protocol: 'responses', agent: 'alma', options: safeOpts });
+  assert.match(onResult.input[1].content[0].text, /magpie-purge: state -> enabled/);
+  assert.equal(onResult.input[0].content[0].text.includes('Warm.'), false);
+
+  const reqAux = {
+    model: 'alma-nmem',
+    input: [
+      { role: 'system', content: [{ type: 'input_text', text: 'Return JSON for memory extraction.' }] },
+      { role: 'user', content: [{ type: 'input_text', text: '/purge on persona strict' }] },
+      { role: 'user', content: [{ type: 'input_text', text: 'extract memories' }] }
+    ]
+  };
+  assert.equal(onRequest(reqAux, { protocol: 'responses', agent: 'alma', options: safeOpts }), undefined);
+});
+
+test('drops empty scrubbed Anthropic system blocks and keeps Responses secondary system in append mode', () => {
+  const anthropicBody = {
+    model: 'claude',
+    system: [{ type: 'text', text: 'PERSONALITY: remove entirely' }, { type: 'text', text: 'SYSTEM INFO - keep this' }],
+    messages: [{ role: 'user', content: 'hello' }]
+  };
+  const anthropicResult = onRequest(anthropicBody, context('anthropic', { agent: 'alma', options: { ...options, defaultMode: 'replace' } }));
+  assert.equal(anthropicResult.system.length, 2);
+  assert.equal(anthropicResult.system[1].text, 'SYSTEM INFO - keep this');
+
+  const responsesBody = {
+    model: 'gpt',
+    input: [
+      { role: 'system', content: [{ type: 'input_text', text: 'PERSONALITY: first' }] },
+      { role: 'developer', content: [{ type: 'input_text', text: 'PERSONALITY: second' }] },
+      { role: 'user', content: [{ type: 'input_text', text: 'hello' }] }
+    ]
+  };
+  const responsesAppend = onRequest(responsesBody, context('responses', { options: { ...options, defaultMode: 'append' } }));
+  assert.equal(responsesAppend.input[1].content[0].text, 'PERSONALITY: second');
 });

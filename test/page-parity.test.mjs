@@ -22,6 +22,19 @@ function compare(engineEnvelope, options) {
   assert.deepEqual({ mode: page.mode, personaId: page.personaId || null, reason: page.reason }, { mode: engine.mode, personaId: engine.personaId || null, reason: engine.reason });
 }
 
+test('page simulator matches engine for Alma-wrapped human directives', () => {
+  const turn = '[Context: reminder\nEMOTION SYSTEM — private\nFATIGUE SYSTEM: private][Message sent-at: now]\n/purge once strict inspect\n\n## Response Guidelines\nKeep it short.';
+  compare({
+    model: 'claude',
+    agent: 'alma',
+    cwd: '/workspace/app',
+    protocol: 'chat',
+    systemText: 'WORKING DIRECTORY - /workspace/app',
+    userText: turn,
+    userTurns: [turn]
+  }, { defaultMode: 'off' });
+});
+
 test('page simulator matches engine decisions across fifteen wire cases', () => {
   const base = { model: 'claude', agent: 'codex', cwd: '/workspace/app', protocol: 'chat', systemText: 'WORKING DIRECTORY - /workspace/app', userText: 'review auth', userTurns: ['review auth'] };
   const cases = [
@@ -39,7 +52,9 @@ test('page simulator matches engine decisions across fifteen wire cases', () => 
     [{ ...base, userText: '/purge once strict audit', userTurns: ['/purge on', '/purge once strict audit'] }, { excludedModelGlobs: [], defaultMode: 'off' }],
     [{ ...base, userText: 'custom', userTurns: ['custom'] }, { defaultMode: 'fallback', defaultPersonaId: 'custom', personas: [{ id: 'custom', template: 'Custom' }] }],
     [{ ...base, userText: 'builtin', userTurns: ['builtin'] }, { defaultMode: 'fallback', defaultPersonaId: 'builtin-example' }],
-    [{ ...base, protocol: 'Gemini', userText: 'memory extract', systemText: 'Return JSON for memory extraction.' }, { defaultMode: 'replace', excludedModelGlobs: [] }]
+    [{ ...base, protocol: 'Gemini', userText: 'memory extract', systemText: 'Return JSON for memory extraction.' }, { defaultMode: 'replace', excludedModelGlobs: [] }],
+    [{ ...base, userText: 'follow up', userTurns: ['/purge once strict inspect', 'follow up'] }, { defaultMode: 'off' }],
+    [{ ...base, userText: 'follow up', userTurns: ['/purge off', '/purge once strict inspect', 'follow up'] }, { defaultMode: 'strict' }]
   ];
   cases.forEach(([envelope, options]) => compare(envelope, options));
 });

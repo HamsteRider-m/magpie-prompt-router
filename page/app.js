@@ -14,8 +14,20 @@
   function list(value) { return Array.isArray(value) ? value : text(value).split(',').map(function (item) { return item.trim(); }).filter(Boolean); }
   function excluded(config) { return config.excludedModelGlobs === undefined ? defaults.excludedModelGlobs : list(config.excludedModelGlobs); }
   function glob(valueText, pattern) { var escaped = text(pattern || '*').replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.'); return new RegExp('^' + escaped + '$', 'i').test(text(valueText)); }
+  function getHumanSlice(rawTurn) {
+    var message = text(rawTurn);
+    var sentAt = message.indexOf('[Message sent-at:');
+    if (sentAt < 0) return { human: message };
+    var sentAtEnd = message.indexOf(']', sentAt);
+    if (sentAtEnd < 0) return { human: message };
+    var humanStart = sentAtEnd + 1;
+    while (humanStart < message.length && /[\r\n \t]/.test(message[humanStart])) humanStart += 1;
+    var guidelines = message.indexOf('\n\n## Response Guidelines', humanStart);
+    return { human: message.slice(humanStart, guidelines < 0 ? message.length : guidelines) };
+  }
+
   function parseDirective(message, personaIds) {
-    var match = text(message).match(/^\s*(\/purge|@purge)\b(?:\s+([\s\S]*))?$/i);
+    var match = getHumanSlice(message).human.match(/^\s*(\/purge|@purge)\b(?:\s+([\s\S]*))?$/i);
     if (!match) return null;
     var command = match[1].toLowerCase();
     var tokens = text(match[2]).trim().split(/\s+/).filter(Boolean);
@@ -45,7 +57,7 @@
     var personaIds = new Set(Object.keys(personas));
     var turns = list(sample.userTurns || [sample.message]);
     var sticky = { enabled: true, mode: null, personaId: null };
-    var parsed = turns.map(function (turn) { var item = parseDirective(turn, personaIds); if (item) { if (item.command === 'off') { sticky.enabled = false; sticky.mode = 'off'; } else { sticky.enabled = true; sticky.mode = item.mode || sticky.mode; sticky.personaId = item.personaId || sticky.personaId; } } return item; });
+    var parsed = turns.map(function (turn) { var item = parseDirective(turn, personaIds); if (item) { if (item.command === 'on') { sticky.enabled = true; sticky.mode = item.mode || sticky.mode; sticky.personaId = item.personaId || sticky.personaId; } else if (item.command === 'off') { sticky.enabled = false; sticky.mode = 'off'; } } return item; });
     var latest = parsed[parsed.length - 1] || { prompt: text(sample.message), command: null };
     var explicitOnce = latest.command === 'once' || latest.command === '@purge';
     if (config.enabled === false) return { mode: 'off', personaId: null, reason: 'disabled' };
@@ -56,7 +68,8 @@
     var personaId = latest.personaId || (rule && rule.personaId) || sticky.personaId || config.defaultPersonaId || BUILTIN_PERSONA.id;
     if (explicitOnce || sticky.enabled) {
       var persona = personas[personaId] || BUILTIN_PERSONA;
-      if (mode === 'fallback' && (personaId === BUILTIN_PERSONA.id || !text(persona.template).trim())) mode = 'off';
+      var hasCustomBuiltin = personaId === BUILTIN_PERSONA.id && (config.personas || []).some(function (item) { return item && item.id === personaId && (text(item.template).trim() || text(item.filePath).trim()); });
+      if (mode === 'fallback' && ((personaId === BUILTIN_PERSONA.id && !hasCustomBuiltin) || !(text(persona.template).trim() || text(persona.filePath).trim()))) mode = 'off';
       else if (mode === 'fallback') mode = 'replace';
       return { mode: MODES.includes(mode) ? mode : 'off', personaId: explicitOnce || sticky.enabled ? personaId : null, reason: latest.command ? 'directive-' + latest.command : rule ? 'rule' : 'default' };
     }
@@ -78,7 +91,7 @@
   function renderDefaults() { var select = el('defaultPersona'); select.textContent = ''; state.options.personas.forEach(function (persona) { var option = document.createElement('option'); option.value = persona.id; option.textContent = persona.name || persona.id; option.selected = persona.id === state.options.defaultPersonaId; select.appendChild(option); }); }
   function render() { el('enabled').checked = state.options.enabled !== false; el('defaultMode').value = state.options.defaultMode || 'off'; el('defaultKeepCwd').checked = state.options.defaultKeepCwd !== false; el('bypassAuxiliary').checked = state.options.bypassAuxiliary !== false; el('excludedModelGlobs').value = list(state.options.excludedModelGlobs).join(', '); renderDefaults(); renderPersonas(); renderRules(); updateSimulator(); }
   function updateSimulator() { if (!el('sim-result')) return; var result = route({ model: value('sim-model'), workspace: value('sim-workspace'), agent: value('sim-agent'), protocol: value('sim-protocol'), systemText: value('sim-system'), message: value('sim-message'), userTurns: [value('sim-message')] }); el('sim-result').textContent = result.mode + ' · ' + result.reason + (result.personaId ? ' · ' + result.personaId : ''); }
-  function init() { var loaded = typeof optionsApi.get === 'function' ? optionsApi.get() : null; Promise.resolve(loaded).then(function (saved) { state.options = Object.assign(copy(defaults), saved || {}, { personas: saved && saved.personas ? saved.personas : copy(defaults.personas), rules: saved && saved.rules ? saved.rules : [] }); render(); }); ['enabled', 'defaultMode', 'defaultPersona', 'defaultKeepCwd', 'bypassAuxiliary', 'excludedModelGlobs'].forEach(function (id) { el(id).addEventListener('change', sync); }); el('excludedModelGlobs').addEventListener('input', sync); ['sim-model', 'sim-workspace', 'sim-agent', 'sim-protocol', 'sim-system', 'sim-message'].forEach(function (id) { el(id).addEventListener('input', updateSimulator); el(id).addEventListener('change', updateSimulator); }); el('add-persona').addEventListener('click', function () { state.options.personas.push({ id: 'persona-' + Date.now(), name: 'New persona', template: BUILTIN_PERSONA.template }); render(); sync(); }); el('add-rule').addEventListener('click', function () { state.options.rules.push({ enabled: true, mode: 'off', personaId: state.options.defaultPersonaId }); renderRules(); sync(); }); el('simulate').addEventListener('click', updateSimulator); var applyTheme = function (theme) { var isDark = typeof theme === 'object' ? Boolean(theme && theme.dark) : theme === 'dark'; document.documentElement.dataset.theme = isDark ? 'dark' : 'light'; }; if (typeof host.onTheme === 'function') host.onTheme(applyTheme); if (host.theme) applyTheme(host.theme); }
+  function init() { var loaded = typeof optionsApi.get === 'function' ? optionsApi.get() : null; Promise.resolve(loaded).then(function (saved) { state.options = Object.assign(copy(defaults), saved || {}, { personas: saved && saved.personas ? saved.personas : copy(defaults.personas), rules: saved && saved.rules ? saved.rules : [] }); render(); }).catch(function () { render(); }); ['enabled', 'defaultMode', 'defaultPersona', 'defaultKeepCwd', 'bypassAuxiliary', 'excludedModelGlobs'].forEach(function (id) { el(id).addEventListener('change', sync); }); el('excludedModelGlobs').addEventListener('input', sync); ['sim-model', 'sim-workspace', 'sim-agent', 'sim-protocol', 'sim-system', 'sim-message'].forEach(function (id) { el(id).addEventListener('input', updateSimulator); el(id).addEventListener('change', updateSimulator); }); el('add-persona').addEventListener('click', function () { state.options.personas.push({ id: 'persona-' + Date.now(), name: 'New persona', template: BUILTIN_PERSONA.template }); render(); sync(); }); el('add-rule').addEventListener('click', function () { state.options.rules.push({ enabled: true, mode: 'off', personaId: state.options.defaultPersonaId }); renderRules(); sync(); }); el('simulate').addEventListener('click', updateSimulator); var applyTheme = function (theme) { var isDark = typeof theme === 'object' ? Boolean(theme && theme.dark) : theme === 'dark'; document.documentElement.dataset.theme = isDark ? 'dark' : 'light'; }; if (typeof host.onTheme === 'function') host.onTheme(applyTheme); if (host.ready && typeof host.ready.then === 'function') host.ready.then(applyTheme, function () {}); if (host.theme) applyTheme(host.theme); }
   window.PurgePage = { route: route, getOptions: function () { return copy(state.options); }, init: init };
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();
 }());

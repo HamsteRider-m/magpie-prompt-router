@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 import test from 'node:test';
 
-function sandbox() {
+function sandbox(magpieOverride) {
   const elements = new Map();
   function element(tag) {
     const node = { tagName: tag.toUpperCase(), children: [], listeners: {}, style: {}, dataset: {}, value: '', checked: false, textContent: '', className: '', appendChild(child) { this.children.push(child); return child; }, addEventListener(name, handler) { this.listeners[name] = handler; }, dispatch(name, event = { target: this }) { if (this.listeners[name]) this.listeners[name](event); } };
@@ -16,7 +16,8 @@ function sandbox() {
   const writes = [];
   let pending;
   const document = { readyState: 'loading', documentElement: { dataset: {} }, getElementById: (id) => elements.get(id), createElement: element, addEventListener: (name, handler) => { if (name === 'DOMContentLoaded') document.ready = handler; } };
-  const context = { window: { magpie: { options: { get: () => ({ defaultMode: 'off', personas: [{ id: 'p', name: 'P', template: 'P' }], rules: [] }), set: (options) => writes.push(options) } } }, document, console, Promise, Date, JSON, RegExp, clearTimeout: () => {}, setTimeout: (callback) => { pending = callback; return 1; }, performance };
+  const magpie = magpieOverride || { options: { get: () => ({ defaultMode: 'off', personas: [{ id: 'p', name: 'P', template: 'P' }], rules: [] }), set: (options) => writes.push(options) } };
+  const context = { window: { magpie }, document, console, Promise, Date, JSON, RegExp, clearTimeout: () => {}, setTimeout: (callback) => { pending = callback; return 1; }, performance };
   context.window.window = context.window;
   vm.runInNewContext(fs.readFileSync(new URL('../page/app.js', import.meta.url), 'utf8'), context);
   return { context, elements, writes, runSave: () => pending() };
@@ -49,4 +50,16 @@ test('routing bypasses excluded model globs and supports default mode', () => {
   const api = fixture.context.window.PurgePage;
   assert.equal(api.route({ model: 'alma-nmem', workspace: '/tmp', message: 'hello' }, { enabled: true, excludedModelGlobs: ['*nmem*'], defaultMode: 'strict' }).mode, 'off');
   assert.equal(api.route({ model: 'claude', workspace: '/tmp', message: 'hello' }, { enabled: true, excludedModelGlobs: [], defaultMode: 'strict' }).mode, 'strict');
+});
+
+test('applies dark theme via magpie.ready and handles options.get rejection safely', async () => {
+  const fixture = sandbox({
+    ready: Promise.resolve({ dark: true, lang: 'en', tokens: {} }),
+    onTheme: () => {},
+    options: { get: () => Promise.reject(new Error('offline')), set: () => {} }
+  });
+  fixture.context.window.PurgePage.init();
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(fixture.context.document.documentElement.dataset.theme, 'dark');
+  assert.equal(fixture.context.window.PurgePage.getOptions().defaultMode, 'off');
 });
