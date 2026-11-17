@@ -1,0 +1,20 @@
+{
+  "name": "magpie-purge",
+  "version": "0.1.0",
+  "type": "module",
+  "license": "MIT",
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
+  "magpie": {
+    "hooks": "./src/hooks.js",
+    "page": {
+      "title": "Purge Router",
+      "titles": {
+        "zh": "提示词分流",
+        "en": "Purge Router"
+      },
+      "file": "page/index.html"
+    }
+  }
+}

@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Purge Router</title>
+  <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+  <main class="shell">
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">MAGPIE PLUGIN</p>
+        <h1>Purge Router</h1>
+      </div>
+      <label class="switch"><span>Enabled</span><input id="enabled" type="checkbox"><i></i></label>
+    </header>
+    <section class="section settings">
+      <div class="section-title"><div><h2>Defaults</h2><p>Set the route used when no rule matches.</p></div><span id="save-status">Saved</span></div>
+      <div class="grid controls">
+        <label>Default mode<select id="defaultMode"><option>off</option><option>strict</option><option>replace</option><option>fallback</option><option>append</option></select></label>
+        <label>Default persona<select id="defaultPersona"></select></label>
+        <label class="check"><input id="defaultKeepCwd" type="checkbox"> Keep working directory</label>
+        <label class="check"><input id="bypassAuxiliary" type="checkbox"> Protect auxiliary calls</label>
+        <label>Excluded model globs<input id="excludedModelGlobs" type="text" placeholder="*nmem*, *embedding*"></label>
+      </div>
+    </section>
+    <section class="section">
+      <div class="section-title"><div><h2>Personas</h2><p>Use a prompt template or load one from a local Markdown file.</p></div><button id="add-persona" type="button">Add persona</button></div>
+      <div id="personas" class="stack"></div>
+    </section>
+    <section class="section">
+      <div class="section-title"><div><h2>Routing rules</h2><p>Rules run from top to bottom. The first match wins.</p></div><button id="add-rule" type="button">Add rule</button></div>
+      <div id="rules" class="stack"></div>
+    </section>
+    <section class="section simulator">
+      <div class="section-title"><div><h2>Live route simulator</h2><p>Test a request against the current settings.</p></div><output id="sim-result">No route selected</output></div>
+      <div class="grid controls"><label>Model<input id="sim-model" value="claude-sonnet"></label><label>Workspace<input id="sim-workspace" value="/workspace/app"></label><label>Agent<input id="sim-agent" value="codex"></label><label>Protocol<select id="sim-protocol"><option>chat</option><option>responses</option><option>anthropic</option><option>gemini</option></select></label><label class="wide">System prompt<textarea id="sim-system"></textarea></label><label class="wide">Message<textarea id="sim-message">Review this code</textarea></label></div>
+      <button id="simulate" type="button">Test route</button>
+    </section>
+    <section class="section reference"><h2>Chat commands</h2><div class="commands"><code>/purge on persona replace</code><code>@purge strict review this</code><code>/purge off</code></div></section>
+  </main>
+  <script src="_magpie/bridge.js"></script>
+  <script src="./app.js"></script>
+</body>
+</html>
