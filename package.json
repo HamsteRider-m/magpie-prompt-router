@@ -30,7 +30,7 @@
     "LICENSE"
   ],
   "bin": {
-    "magpie-purge-presets": "./scripts/sync-some-magic.mjs"
+    "magpie-purge-presets": "scripts/sync-some-magic.mjs"
   },
   "scripts": {
     "test": "node --test test/*.test.mjs",
