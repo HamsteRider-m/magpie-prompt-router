@@ -40,7 +40,9 @@ Account fallback can re-enter the hook with the already rewritten body. The hook
 
 ## Persona files
 
-A persona can point to a local Markdown file. The hook reads the file synchronously only when its mtime or size changes. It removes YAML frontmatter before interpolation. Repeated requests use the cached string while an edited prompt file reloads after a change.
+A persona can point to a local Markdown file (resolved relative to the working directory, the plugin root, or the user's `~/.config/magpie/magpie-purge/presets/some-magic` directory). The hook reads the file synchronously only when its mtime or size changes, and `src/presets.js` parses YAML frontmatter (`id`, `name`, `description`, `order`, `harness`, `model`) to extract the prompt body. Repeated requests use the cached string while an edited prompt file reloads after a change.
+
+External `some-magic` presets are not bundled in the repository or npm package; users pull them on demand with `scripts/sync-some-magic.mjs` (`npx magpie-purge-presets`). When present locally, `src/presets.js` loads and caches them at lower precedence than `options.personas` (checking directory `mtimeMs` for hot updates), while `page/presets.js` exposes only catalog metadata to the classic-script settings UI.
 
 ## Settings page
 

@@ -1,10 +1,44 @@
 {
   "name": "magpie-purge",
-  "version": "0.1.0",
+  "version": "0.2.0",
+  "description": "Conditional system prompt router and persona switcher for the Magpie gateway with optional some-magic preset sync.",
   "type": "module",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/HamsteRider-m/magpie-purge.git"
+  },
+  "homepage": "https://github.com/HamsteRider-m/magpie-purge#readme",
+  "bugs": {
+    "url": "https://github.com/HamsteRider-m/magpie-purge/issues"
+  },
+  "keywords": [
+    "magpie",
+    "magpie-gateway",
+    "magpie-hooks",
+    "magpie-plugin",
+    "prompt-routing",
+    "persona"
+  ],
+  "files": [
+    "src",
+    "page",
+    "scripts/sync-some-magic.mjs",
+    "docs",
+    "README.md",
+    "README.zh-CN.md",
+    "LICENSE"
+  ],
+  "bin": {
+    "magpie-purge-presets": "./scripts/sync-some-magic.mjs"
+  },
   "scripts": {
-    "test": "node --test test/*.test.mjs"
+    "test": "node --test test/*.test.mjs",
+    "sync-presets": "node ./scripts/sync-some-magic.mjs"
+  },
+  "engines": {
+    "node": ">=20",
+    "bun": ">=1.4.2"
   },
   "magpie": {
     "hooks": "./src/hooks.js",
@@ -15,6 +49,22 @@
         "en": "Purge Router"
       },
       "file": "page/index.html"
+    },
+    "permissions": [],
+    "options": {
+      "enabled": true,
+      "defaultMode": "off",
+      "defaultPersonaId": "builtin-example",
+      "defaultKeepCwd": true,
+      "bypassAuxiliary": true,
+      "allowExcludedModelsOnOnce": false,
+      "excludedModelGlobs": [
+        "*nmem*",
+        "*embedding*",
+        "*rerank*"
+      ],
+      "personas": [],
+      "rules": []
     }
   }
 }

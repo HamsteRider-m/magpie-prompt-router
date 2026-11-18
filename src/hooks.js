@@ -11,6 +11,7 @@ import {
   scrubAlmaUserContext,
   scrubHostSystemPrompt
 } from './engine.js';
+import { loadSomeMagicPresetMap, parsePersonaMarkdown, resolveSomeMagicFilePath } from './presets.js';
 
 export const MAGPIE_IMMUTABLE_WIRE_KEYS = ['tools', 'tool_choice', 'function_call', 'functions', 'toolConfig', 'model', 'stream'];
 const originalBodies = new Map();
@@ -208,17 +209,20 @@ function replaceSystem(body, protocol, persona, mode, renderedPersona, host) {
 }
 
 function loadPersonas(config) {
-  const map = {};
+  const map = loadSomeMagicPresetMap();
   for (const persona of config.personas) {
     if (!persona.filePath) {
       map[persona.id] = persona;
       continue;
     }
     try {
-      const filePath = path.resolve(persona.filePath);
+      const filePath = resolveSomeMagicFilePath(persona.filePath);
       const stat = fs.statSync(filePath);
       const cached = personaFiles.get(filePath);
-      if (!cached || cached.mtimeMs !== stat.mtimeMs || cached.size !== stat.size) personaFiles.set(filePath, { mtimeMs: stat.mtimeMs, size: stat.size, content: fs.readFileSync(filePath, 'utf8').replace(/^---[\s\S]*?---\s*/, '') });
+      if (!cached || cached.mtimeMs !== stat.mtimeMs || cached.size !== stat.size) {
+        const body = parsePersonaMarkdown(fs.readFileSync(filePath, 'utf8'), persona.id).body;
+        personaFiles.set(filePath, { mtimeMs: stat.mtimeMs, size: stat.size, content: body });
+      }
       map[persona.id] = { ...persona, template: personaFiles.get(filePath).content };
     } catch {
       map[persona.id] = persona;

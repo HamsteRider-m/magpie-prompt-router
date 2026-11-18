@@ -1,6 +1,7 @@
 (function () {
   'use strict';
   var BUILTIN_PERSONA = { id: 'builtin-example', name: 'Concise neutral', template: 'Answer directly and clearly. Keep the response concise.\nWorking directory: {{cwd}}' };
+  var PRESETS = Array.isArray(window.MAGPIE_PURGE_PRESETS) ? window.MAGPIE_PURGE_PRESETS : [];
   var MODES = ['strict', 'replace', 'fallback', 'append', 'off'];
   var defaults = { enabled: true, defaultMode: 'off', defaultPersonaId: BUILTIN_PERSONA.id, defaultKeepCwd: true, bypassAuxiliary: true, excludedModelGlobs: ['*nmem*', '*embedding*', '*rerank*'], personas: [BUILTIN_PERSONA], rules: [] };
   var state = { options: copy(defaults), timer: null };
@@ -53,6 +54,7 @@
     var config = options || state.options;
     var personas = Object.create(null);
     personas[BUILTIN_PERSONA.id] = BUILTIN_PERSONA;
+    PRESETS.forEach(function (preset) { if (preset && preset.id) personas[preset.id] = Object.assign({ preset: true }, preset); });
     (config.personas || []).forEach(function (persona) { if (persona && persona.id) personas[persona.id] = persona; });
     var personaIds = new Set(Object.keys(personas));
     var turns = list(sample.userTurns || [sample.message]);
@@ -69,7 +71,7 @@
     if (explicitOnce || sticky.enabled) {
       var persona = personas[personaId] || BUILTIN_PERSONA;
       var hasCustomBuiltin = personaId === BUILTIN_PERSONA.id && (config.personas || []).some(function (item) { return item && item.id === personaId && (text(item.template).trim() || text(item.filePath).trim()); });
-      if (mode === 'fallback' && ((personaId === BUILTIN_PERSONA.id && !hasCustomBuiltin) || !(text(persona.template).trim() || text(persona.filePath).trim()))) mode = 'off';
+      if (mode === 'fallback' && ((personaId === BUILTIN_PERSONA.id && !hasCustomBuiltin) || !(persona.preset || text(persona.template).trim() || text(persona.filePath).trim()))) mode = 'off';
       else if (mode === 'fallback') mode = 'replace';
       return { mode: MODES.includes(mode) ? mode : 'off', personaId: explicitOnce || sticky.enabled ? personaId : null, reason: latest.command ? 'directive-' + latest.command : rule ? 'rule' : 'default' };
     }
@@ -88,10 +90,47 @@
   function input(label, current, handler) { var wrap = document.createElement('label'); wrap.textContent = label; var node = document.createElement('input'); node.value = current || ''; node.addEventListener('input', handler); wrap.appendChild(node); return wrap; }
   function renderPersonas() { var target = el('personas'); target.textContent = ''; state.options.personas.forEach(function (persona, index) { var item = document.createElement('div'); item.className = 'item'; var head = document.createElement('div'); head.className = 'item-head'; var title = document.createElement('strong'); title.textContent = persona.name || persona.id; head.appendChild(title); var actions = document.createElement('div'); actions.className = 'item-actions'; actions.appendChild(button('Delete', function () { state.options.personas.splice(index, 1); render(); sync(); })); head.appendChild(actions); item.appendChild(head); var grid = document.createElement('div'); grid.className = 'grid'; grid.appendChild(input('ID', persona.id, function (event) { persona.id = event.target.value; renderDefaults(); sync(); })); grid.appendChild(input('Name', persona.name, function (event) { persona.name = event.target.value; title.textContent = persona.name || persona.id; sync(); })); var template = input('Template', persona.template, function (event) { persona.template = event.target.value; sync(); }); template.className = 'wide'; grid.appendChild(template); grid.appendChild(input('Local file path', persona.filePath, function (event) { persona.filePath = event.target.value; sync(); })); item.appendChild(grid); target.appendChild(item); }); }
   function renderRules() { var target = el('rules'); target.textContent = ''; state.options.rules.forEach(function (rule, index) { var item = document.createElement('div'); item.className = 'item'; var head = document.createElement('div'); head.className = 'item-head'; var title = document.createElement('strong'); title.textContent = 'Rule ' + (index + 1); head.appendChild(title); var actions = document.createElement('div'); actions.className = 'item-actions'; if (index) actions.appendChild(button('Up', function () { var previous = state.options.rules[index - 1]; state.options.rules[index - 1] = rule; state.options.rules[index] = previous; renderRules(); sync(); })); if (index < state.options.rules.length - 1) actions.appendChild(button('Down', function () { var next = state.options.rules[index + 1]; state.options.rules[index + 1] = rule; state.options.rules[index] = next; renderRules(); sync(); })); actions.appendChild(button('Delete', function () { state.options.rules.splice(index, 1); renderRules(); sync(); })); head.appendChild(actions); item.appendChild(head); var grid = document.createElement('div'); grid.className = 'grid'; ['workspaceGlob', 'modelGlob', 'agentGlob', 'protocol', 'userKeywords'].forEach(function (key) { grid.appendChild(input(key, Array.isArray(rule[key]) ? rule[key].join(', ') : rule[key], function (event) { rule[key] = key === 'userKeywords' ? list(event.target.value) : event.target.value; sync(); })); }); var modes = document.createElement('select'); MODES.filter(function (mode) { return mode !== 'off' || true; }).forEach(function (mode) { var option = document.createElement('option'); option.value = mode; option.textContent = mode; option.selected = rule.mode === mode; modes.appendChild(option); }); modes.addEventListener('change', function (event) { rule.mode = event.target.value; sync(); }); var modeLabel = document.createElement('label'); modeLabel.textContent = 'Mode'; modeLabel.appendChild(modes); grid.appendChild(modeLabel); item.appendChild(grid); target.appendChild(item); }); }
-  function renderDefaults() { var select = el('defaultPersona'); select.textContent = ''; state.options.personas.forEach(function (persona) { var option = document.createElement('option'); option.value = persona.id; option.textContent = persona.name || persona.id; option.selected = persona.id === state.options.defaultPersonaId; select.appendChild(option); }); }
-  function render() { el('enabled').checked = state.options.enabled !== false; el('defaultMode').value = state.options.defaultMode || 'off'; el('defaultKeepCwd').checked = state.options.defaultKeepCwd !== false; el('bypassAuxiliary').checked = state.options.bypassAuxiliary !== false; el('excludedModelGlobs').value = list(state.options.excludedModelGlobs).join(', '); renderDefaults(); renderPersonas(); renderRules(); updateSimulator(); }
+  function renderDefaults() {
+    var select = el('defaultPersona');
+    select.textContent = '';
+    var seen = Object.create(null);
+    state.options.personas.forEach(function (persona) {
+      seen[persona.id] = true;
+      var option = document.createElement('option');
+      option.value = persona.id;
+      option.textContent = persona.name || persona.id;
+      option.selected = persona.id === state.options.defaultPersonaId;
+      select.appendChild(option);
+    });
+    var remaining = PRESETS.filter(function (preset) { return preset && preset.id && !seen[preset.id]; });
+    if (remaining.length) {
+      var group = document.createElement('optgroup');
+      group.label = 'some-magic presets';
+      remaining.forEach(function (preset) {
+        var option = document.createElement('option');
+        option.value = preset.id;
+        option.textContent = (preset.name || preset.id) + ' (' + preset.id + ')';
+        option.selected = preset.id === state.options.defaultPersonaId;
+        group.appendChild(option);
+      });
+      select.appendChild(group);
+    }
+  }
+  function renderPresets() {
+    var select = el('preset-select');
+    if (!select) return;
+    select.textContent = '';
+    PRESETS.forEach(function (preset) {
+      var option = document.createElement('option');
+      option.value = preset.id;
+      option.textContent = (preset.name || preset.id) + ' (' + preset.id + ')';
+      if (preset.description) option.title = preset.description;
+      select.appendChild(option);
+    });
+  }
+  function render() { el('enabled').checked = state.options.enabled !== false; el('defaultMode').value = state.options.defaultMode || 'off'; el('defaultKeepCwd').checked = state.options.defaultKeepCwd !== false; el('bypassAuxiliary').checked = state.options.bypassAuxiliary !== false; el('excludedModelGlobs').value = list(state.options.excludedModelGlobs).join(', '); renderDefaults(); renderPresets(); renderPersonas(); renderRules(); updateSimulator(); }
   function updateSimulator() { if (!el('sim-result')) return; var result = route({ model: value('sim-model'), workspace: value('sim-workspace'), agent: value('sim-agent'), protocol: value('sim-protocol'), systemText: value('sim-system'), message: value('sim-message'), userTurns: [value('sim-message')] }); el('sim-result').textContent = result.mode + ' · ' + result.reason + (result.personaId ? ' · ' + result.personaId : ''); }
-  function init() { var loaded = typeof optionsApi.get === 'function' ? optionsApi.get() : null; Promise.resolve(loaded).then(function (saved) { state.options = Object.assign(copy(defaults), saved || {}, { personas: saved && saved.personas ? saved.personas : copy(defaults.personas), rules: saved && saved.rules ? saved.rules : [] }); render(); }).catch(function () { render(); }); ['enabled', 'defaultMode', 'defaultPersona', 'defaultKeepCwd', 'bypassAuxiliary', 'excludedModelGlobs'].forEach(function (id) { el(id).addEventListener('change', sync); }); el('excludedModelGlobs').addEventListener('input', sync); ['sim-model', 'sim-workspace', 'sim-agent', 'sim-protocol', 'sim-system', 'sim-message'].forEach(function (id) { el(id).addEventListener('input', updateSimulator); el(id).addEventListener('change', updateSimulator); }); el('add-persona').addEventListener('click', function () { state.options.personas.push({ id: 'persona-' + Date.now(), name: 'New persona', template: BUILTIN_PERSONA.template }); render(); sync(); }); el('add-rule').addEventListener('click', function () { state.options.rules.push({ enabled: true, mode: 'off', personaId: state.options.defaultPersonaId }); renderRules(); sync(); }); el('simulate').addEventListener('click', updateSimulator); var applyTheme = function (theme) { var isDark = typeof theme === 'object' ? Boolean(theme && theme.dark) : theme === 'dark'; document.documentElement.dataset.theme = isDark ? 'dark' : 'light'; }; if (typeof host.onTheme === 'function') host.onTheme(applyTheme); if (host.ready && typeof host.ready.then === 'function') host.ready.then(applyTheme, function () {}); if (host.theme) applyTheme(host.theme); }
+  function init() { var loaded = typeof optionsApi.get === 'function' ? optionsApi.get() : null; Promise.resolve(loaded).then(function (saved) { state.options = Object.assign(copy(defaults), saved || {}, { personas: saved && saved.personas ? saved.personas : copy(defaults.personas), rules: saved && saved.rules ? saved.rules : [] }); render(); }).catch(function () { render(); }); ['enabled', 'defaultMode', 'defaultPersona', 'defaultKeepCwd', 'bypassAuxiliary', 'excludedModelGlobs'].forEach(function (id) { el(id).addEventListener('change', sync); }); el('excludedModelGlobs').addEventListener('input', sync); ['sim-model', 'sim-workspace', 'sim-agent', 'sim-protocol', 'sim-system', 'sim-message'].forEach(function (id) { el(id).addEventListener('input', updateSimulator); el(id).addEventListener('change', updateSimulator); }); el('add-persona').addEventListener('click', function () { state.options.personas.push({ id: 'persona-' + Date.now(), name: 'New persona', template: BUILTIN_PERSONA.template }); render(); sync(); }); if (el('add-preset') && el('preset-select')) { el('add-preset').addEventListener('click', function () { var selectedId = value('preset-select'); var preset = PRESETS.find(function (item) { return item.id === selectedId; }); if (!preset) return; if (!state.options.personas.some(function (item) { return item.id === preset.id; })) { state.options.personas.push({ id: preset.id, name: preset.name, filePath: preset.filePath }); render(); sync(); } }); } el('add-rule').addEventListener('click', function () { state.options.rules.push({ enabled: true, mode: 'off', personaId: state.options.defaultPersonaId }); renderRules(); sync(); }); el('simulate').addEventListener('click', updateSimulator); var applyTheme = function (theme) { var isDark = typeof theme === 'object' ? Boolean(theme && theme.dark) : theme === 'dark'; document.documentElement.dataset.theme = isDark ? 'dark' : 'light'; }; if (typeof host.onTheme === 'function') host.onTheme(applyTheme); if (host.ready && typeof host.ready.then === 'function') host.ready.then(applyTheme, function () {}); if (host.theme) applyTheme(host.theme); }
   window.PurgePage = { route: route, getOptions: function () { return copy(state.options); }, init: init };
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();
 }());

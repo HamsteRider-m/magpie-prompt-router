@@ -4,16 +4,17 @@
 
 ## Install
 
-Install from a local checkout:
+Install from npm / Magpie Discover:
 
 ```sh
-magpie plugin add /path/to/magpie-purge
+magpie plugin add magpie-purge
 ```
 
-Install from GitHub. GitHub authentication is required while the repository is private:
+Or install from GitHub or a local checkout:
 
 ```sh
 magpie plugin add github:HamsteRider-m/magpie-purge
+magpie plugin add /path/to/magpie-purge
 ```
 
 Open the Magpie settings page to enable the plugin, define personas, and add ordered routing rules.
@@ -69,6 +70,22 @@ It also preserves `body.config.tools` and `body.config.toolConfig`. It preserves
 
 The hook restores the original body before exact account fallback re-entry. It reports only Magpie's valid statuses and fails open when input validation or the immutable-key check fails.
 
+## External presets (`some-magic`)
+
+`magpie-purge` does not ship third-party `some-magic` prompt bodies inside the repository or npm tarball. Pull the 20 Markdown persona presets from [ZiChuanLan/some-magic](https://github.com/ZiChuanLan/some-magic) on demand with the included sync command:
+
+```sh
+npx magpie-purge-presets
+# or inside a local checkout:
+npm run sync-presets
+```
+
+By default, presets are synced to `~/.config/magpie/magpie-purge/presets/some-magic` (so they persist across `magpie plugin update`). Pass `--local` to sync into `./presets/some-magic`, or `--dir <path>` for a custom directory.
+
+- Once synced, any preset ID works directly in chat commands (note: include an active mode when `defaultMode` is `off`, for example `/purge once qwen-37 strict ...` or `/purge on eni-opus-5 replace`), as `defaultPersonaId`, or in routing rules.
+- Select or import presets from the **Personas** and **Defaults** sections in the Magpie settings page (`page/presets.js` carries catalog metadata only).
+- Defining a persona in `options.personas` with the same `id` overrides any synced preset. Relative `filePath` values (`presets/some-magic/...`) resolve against both the plugin root and `~/.config/magpie/magpie-purge/presets/some-magic`.
+
 ## Development
 
 Run the test suite with Node:
@@ -87,6 +104,6 @@ The test suite covers real Alma envelopes, auxiliary immunity, all four wire pro
 
 ## Credits
 
-The routing ideas build on work by YuJunZhiXue/dsh-purge, [ZiChuanLan/pi-purge](https://github.com/ZiChuanLan/pi-purge), and [ZiChuanLan/agent-purge](https://github.com/ZiChuanLan/agent-purge).
+The routing ideas build on work by YuJunZhiXue/dsh-purge, [ZiChuanLan/pi-purge](https://github.com/ZiChuanLan/pi-purge), [ZiChuanLan/agent-purge](https://github.com/ZiChuanLan/agent-purge), and [ZiChuanLan/some-magic](https://github.com/ZiChuanLan/some-magic).
 
 Licensed under the MIT License.

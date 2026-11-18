@@ -26,7 +26,7 @@
       </div>
     </section>
     <section class="section">
-      <div class="section-title"><div><h2>Personas</h2><p>Use a prompt template or load one from a local Markdown file.</p></div><button id="add-persona" type="button">Add persona</button></div>
+      <div class="section-title"><div><h2>Personas</h2><p>Use a prompt template, load a local Markdown file, or pick a some-magic preset (sync locally via <code>npx magpie-purge-presets</code>).</p></div><div class="section-actions"><select id="preset-select" aria-label="some-magic preset"></select><button id="add-preset" type="button">Add preset</button><button id="add-persona" type="button">Add persona</button></div></div>
       <div id="personas" class="stack"></div>
     </section>
     <section class="section">
@@ -41,6 +41,7 @@
     <section class="section reference"><h2>Chat commands</h2><div class="commands"><code>/purge on persona replace</code><code>@purge strict review this</code><code>/purge off</code></div></section>
   </main>
   <script src="_magpie/bridge.js"></script>
+  <script src="./presets.js"></script>
   <script src="./app.js"></script>
 </body>
 </html>

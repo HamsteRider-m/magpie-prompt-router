@@ -4,16 +4,17 @@
 
 ## 安装
 
-从本地目录安装：
+从 npm / Magpie 发现页安装：
 
 ```sh
-magpie plugin add /path/to/magpie-purge
+magpie plugin add magpie-purge
 ```
 
-从 GitHub 安装。仓库仍为私有仓库，因此需要 GitHub 身份验证：
+或从 GitHub / 本地目录安装：
 
 ```sh
 magpie plugin add github:HamsteRider-m/magpie-purge
+magpie plugin add /path/to/magpie-purge
 ```
 
 打开 Magpie 设置页，启用插件，配置 persona，并添加有序路由规则。
@@ -69,6 +70,22 @@ magpie plugin add github:HamsteRider-m/magpie-purge
 
 账号 fallback 重试前，钩子会恢复完全匹配的原始 body。输入校验或不可变字段检查失败时，钩子会放行原请求，并且只报告 Magpie 支持的状态码。
 
+## 外部预设库同步（`some-magic`）
+
+`magpie-purge` 的 Git 仓库与 npm 包本身不打包第三方 `some-magic` 提示词正文。如需使用 [ZiChuanLan/some-magic](https://github.com/ZiChuanLan/some-magic) 的 20 份 Markdown 人设预设，可通过自带快捷命令一键拉取到本机：
+
+```sh
+npx magpie-purge-presets
+# 或在本地仓库目录执行：
+npm run sync-presets
+```
+
+默认会同步到 `~/.config/magpie/magpie-purge/presets/some-magic`（升级插件也不会丢失）；也可传 `--local` 同步到插件目录 `./presets/some-magic`，或用 `--dir <path>` 指定目录。
+
+- 同步后即可直接在聊天指令（当 `defaultMode` 为 `off` 时记得带上模式名，例如 `/purge once qwen-37 strict ...` 或 `/purge on eni-opus-5 replace`）、`defaultPersonaId` 或路由规则中引用预设 ID。
+- 可在 Magpie 设置页的 **Personas** 与 **Defaults** 中直接选择或导入预设目录（`page/presets.js` 仅含预设元数据）。
+- 在 `options.personas` 中配置同 `id` 的条目会覆盖已同步预设；相对路径 `presets/some-magic/...` 会同时在插件根目录与 `~/.config/magpie/magpie-purge/presets/some-magic` 中解析。
+
 ## 开发
 
 使用 Node 运行测试：
@@ -87,6 +104,6 @@ bun test
 
 ## 致谢
 
-路由设计参考了 YuJunZhiXue/dsh-purge、[ZiChuanLan/pi-purge](https://github.com/ZiChuanLan/pi-purge) 和 [ZiChuanLan/agent-purge](https://github.com/ZiChuanLan/agent-purge)。
+路由设计参考了 YuJunZhiXue/dsh-purge、[ZiChuanLan/pi-purge](https://github.com/ZiChuanLan/pi-purge)、[ZiChuanLan/agent-purge](https://github.com/ZiChuanLan/agent-purge) 和 [ZiChuanLan/some-magic](https://github.com/ZiChuanLan/some-magic)。
 
 本项目使用 MIT License。
