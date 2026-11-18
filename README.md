@@ -1,5 +1,7 @@
 # magpie-purge
 
+**English** | [简体中文](README.zh-CN.md)
+
 `magpie-purge` is a self-contained Magpie gateway plugin for conditional system prompt routing. It supports Alma, Pi, Claude Code, Codex, and OpenCode request paths through Magpie's `chat`, `responses`, `anthropic`, and `gemini` hooks.
 
 ## Install

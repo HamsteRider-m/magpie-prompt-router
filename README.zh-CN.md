@@ -1,5 +1,7 @@
 # magpie-purge
 
+[English](README.md) | **简体中文**
+
 `magpie-purge` 是一个自包含的 Magpie 网关插件，用于按条件分流系统提示词。它支持 Alma、Pi、Claude Code、Codex 和 OpenCode，并通过 Magpie 的 `chat`、`responses`、`anthropic` 和 `gemini` 请求钩子工作。
 
 ## 安装
