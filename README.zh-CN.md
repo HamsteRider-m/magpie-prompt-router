@@ -22,7 +22,7 @@
 
 1. **请求归一化（`envelopeFor`）**：从 `chat`、`responses`、`anthropic`、`gemini` 四种协议中提取 `{ protocol, model, agent, cwd, systemText, userText, userTurns }`。
 2. **对话指令归约（`reduceThreadDirectives`）**：按顺序扫描所有用户轮次（仅解析 Alma `[Context: ...][Message sent-at: ...]` 与 `## Response Guidelines` 之间的人类文本切片），计算线程级粘性 `/route on|off` 状态以及当前轮 `/route once` / `@route` 覆盖。
-3. **辅助调用免疫（`classifyAuxiliaryCall`）**：在改写前优先检查 `excludedModelGlobs`（默认 `*nmem*`、`*embedding*`、`*rerank*`）以及无主 Agent 工作目录标记的 JSON 选择器/记忆/标题/分类等后台调用。
+3. **辅助调用免疫（`classifyAuxiliaryCall`）**：在改写前优先检查 `excludedModelGlobs`（默认 `*nmem*`、`*embedding*`、`*rerank*`、`*jev*`）以及无主 Agent 工作目录标记的 JSON 选择器/记忆/标题/分类等后台调用。
 4. **有序规则匹配（`options.rules`）**：自上而下遍历启用的规则，单条规则内已填写的条件须同时满足（`workspaceGlob`、`modelGlob`、`agentGlob`、精确 `protocol` 以及全部 `userKeywords`），首条命中生效。
 5. **优先级链**：当前轮 `/route` 或 `@route` 覆盖 > 首条命中规则 > 线程粘性 `/route on` 状态 > 全局 `defaultMode` 与 `defaultPersonaId`。
 6. **协议改写与边界校验**：按选定模式改写系统提示词（并在 `replace`/`strict` 下清洗 Alma 用户上下文），校验 7 个不可变 wire 字段与 `body.config.tools`/`body.config.toolConfig` 未被破坏，否则 fail-open 放行原请求。
@@ -45,7 +45,7 @@
   - `modelGlob`：对 `body.model` / `ctx.model` 执行不区分大小写的 `*`、`?` glob 匹配。
   - 本地 Markdown persona（`filePath`）：文件路径必须对运行 Magpie 网关的本机进程可读（支持绝对路径或相对于进程工作目录的相对路径）；读取时自动剥离 YAML frontmatter，并在 `mtime` 或 `size` 变化时热更新。
 - **辅助调用保护前提**：
-  - 默认 `bypassAuxiliary: true` 且 `excludedModelGlobs` 包含 `["*nmem*", "*embedding*", "*rerank*"]`。如使用其他记忆、嵌入或后台模型，请补充到 `excludedModelGlobs`；仅当确实希望单轮 `/route once` 或 `@route` 强制覆盖排除模型时，才开启 `allowExcludedModelsOnOnce: true`。
+  - 默认 `bypassAuxiliary: true` 且 `excludedModelGlobs` 包含 `["*nmem*", "*embedding*", "*rerank*", "*jev*"]`。如使用其他记忆、嵌入或后台模型，请补充到 `excludedModelGlobs`；仅当确实希望单轮 `/route once` 或 `@route` 强制覆盖排除模型时，才开启 `allowExcludedModelsOnOnce: true`。
 - **CI/CD 与自动发布前提（维护者）**：
   - GitHub 仓库开启 Actions 后，每次推送 `main` 或发起 PR 会自动运行测试与发包校验。
   - 推送 `v*` tag 自动发布到 npm 前，需在 GitHub Secrets 配置 `NPM_TOKEN`（或配置 npm Trusted Publishing），且 tag 版本号需与 `package.json` 的 `version` 一致（例如 `v0.1.0`）。

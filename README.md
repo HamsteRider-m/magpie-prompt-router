@@ -22,7 +22,7 @@ Prompt routing in `magpie-prompt-router` does **not** use JEV or any LLM-based r
 
 1. **Envelope extraction**: Normalizes `chat`, `responses`, `anthropic`, and `gemini` payloads into `{ protocol, model, agent, cwd, systemText, userText, userTurns }`.
 2. **Directive reduction**: Scans all user turns in order (operating only on the human slice outside Alma's `[Context: ...][Message sent-at: ...]` wrapper and `## Response Guidelines` footer) to resolve sticky `/route on|off` state and current-turn `/route once` / `@route` overrides.
-3. **Auxiliary-call guard**: Checks `excludedModelGlobs` (default `*nmem*`, `*embedding*`, `*rerank*`) and JSON-only selector/memory/title/classification heuristics before rewriting.
+3. **Auxiliary-call guard**: Checks `excludedModelGlobs` (default `*nmem*`, `*embedding*`, `*rerank*`, `*jev*`) and JSON-only selector/memory/title/classification heuristics before rewriting.
 4. **Ordered rule matching**: Evaluates enabled `options.rules` top-to-bottom. A rule matches only when all of its configured fields match (`workspaceGlob`, `modelGlob`, `agentGlob`, exact `protocol`, and all `userKeywords`).
 5. **Precedence chain**: Current-turn `/route` or `@route` override > first matching rule > sticky `/route on` thread state > global `defaultMode` & `defaultPersonaId`.
 6. **Wire rewrite & safety check**: Rewrites system prompts (and scrubs Alma user context in `replace`/`strict` modes), verifies all seven immutable wire keys plus `body.config.tools` and `body.config.toolConfig`, and fails open if validation fails.
@@ -45,7 +45,7 @@ Before routing takes effect, make sure the following prerequisites are met:
   - `modelGlob`: Matches `body.model` / `ctx.model` case-insensitively with `*` and `?`.
   - `filePath` (local Markdown personas): Must point to a `.md` file readable by the Magpie gateway process (absolute path or relative to the process working directory). YAML frontmatter is stripped automatically and changes reload when `mtime` or `size` changes.
 - **Auxiliary-call protection**:
-  - `bypassAuxiliary` defaults to `true` with `excludedModelGlobs: ["*nmem*", "*embedding*", "*rerank*"]`. Add any extra background/memory model globs you use so they are never rewritten. Keep `allowExcludedModelsOnOnce: false` unless you explicitly want `/route once` or `@route` to override excluded models.
+  - `bypassAuxiliary` defaults to `true` with `excludedModelGlobs: ["*nmem*", "*embedding*", "*rerank*", "*jev*"]`. Add any extra background/memory model globs you use so they are never rewritten. Keep `allowExcludedModelsOnOnce: false` unless you explicitly want `/route once` or `@route` to override excluded models.
 - **CI/CD & release (maintainers)**:
   - GitHub Actions runs tests and package verification on every push to `main` and every pull request.
   - Automated npm publishing on `v*` tag pushes requires `NPM_TOKEN` in repository secrets (or npm Trusted Publishing) and a tag matching `package.json`'s `version` (e.g. `v0.1.0`).
