@@ -13,7 +13,7 @@ function usage() {
 
 Usage:
   mpr status [--recent] [--trace-file <path>] [--config <path>] [--cwd <dir>]
-  mpr init-project [--dir <dir>] [--mode replace|strict|append|fallback] [--force]
+  mpr init-project [--dir <dir>] [--mode replace|strict|append|suffix|fallback] [--force]
   mpr persona list [--config <path>]
   mpr persona add <id> (--template <text> | --file <path>) [--name <name>] [--config <path>]
   mpr persona rm <id> [--config <path>]
@@ -21,7 +21,7 @@ Usage:
   mpr rule add --persona <id> [--mode replace] [--cwd <glob>] [--model <glob>] [--agent <glob>] [--protocol <p>] [--keywords k1,k2] [--config <path>]
   mpr rule rm <1-based-index> [--config <path>]
   mpr bind-cwd <personaId> [--mode replace] [--cwd <dir>] [--config <path>]
-  mpr set-default [--mode off|replace|strict|fallback|append] [--persona <id>] [--auto-project on|off] [--trace on|off] [--config <path>]
+  mpr set-default [--mode off|replace|strict|fallback|append|suffix] [--persona <id>] [--auto-project on|off] [--trace on|off] [--config <path>]
   mpr export [--out <file>] [--config <path>]
   mpr import <file> [--config <path>]
   mpr test [--cwd <dir>] [--model <m>] [--agent <a>] [--protocol chat] [--user <text>] [--system <text>] [--config <path>]
@@ -111,8 +111,8 @@ function run() {
   if (cmd === 'init-project') {
     const dir = path.resolve(flags.dir || process.cwd());
     const mode = String(flags.mode || 'replace').toLowerCase();
-    if (!['strict', 'replace', 'fallback', 'append'].includes(mode)) {
-      die(`Invalid mode "${mode}". Expected one of: strict, replace, fallback, append`);
+    if (!['strict', 'replace', 'fallback', 'append', 'suffix'].includes(mode)) {
+      die(`Invalid mode "${mode}". Expected one of: strict, replace, fallback, append, suffix`);
     }
     const target = path.join(dir, PROJECT_CONFIG_FILENAME);
     if (fs.existsSync(target) && !flags.force) {

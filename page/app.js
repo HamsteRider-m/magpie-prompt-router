@@ -1,7 +1,7 @@
 (function () {
   'use strict';
   var BUILTIN_PERSONA = { id: 'builtin-example', name: 'Concise neutral', template: 'Answer directly and clearly. Keep the response concise.\nWorking directory: {{cwd}}' };
-  var MODES = ['strict', 'replace', 'fallback', 'append', 'off'];
+  var MODES = ['strict', 'replace', 'fallback', 'append', 'suffix', 'off'];
   var defaults = { enabled: true, defaultMode: 'off', defaultPersonaId: BUILTIN_PERSONA.id, defaultKeepCwd: true, bypassAuxiliary: true, autoDiscoverProjectFile: true, excludedModelGlobs: ['*nmem*', '*embedding*', '*rerank*', '*jev*'], personas: [BUILTIN_PERSONA], rules: [] };
   var state = { options: copy(defaults), timer: null };
   var host = window.magpie || {};

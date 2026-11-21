@@ -208,4 +208,84 @@ test('onRequest records recent decisions and supports opt-in traceLog file read 
   assert.equal(last.mode, 'replace');
   assert.equal(last.personaId, 'arch');
   assert.equal(last.changed, true);
+  assert.equal(typeof last.prefixHash, 'string');
+  assert.equal(last.prefixHash.length, 12);
+});
+
+test('cache-preserving suffix mode keeps host prefix and Anthropic cache_control intact across protocols', () => {
+  const cacheControl = { type: 'ephemeral', ttl: '5m' };
+  const opts = { enabled: true, defaultMode: 'suffix', defaultPersonaId: 'p', personas: [{ id: 'p', template: 'Overlay' }] };
+
+  const anthropic = onRequest(
+    { model: 'claude', system: [{ type: 'text', text: 'Host durable prefix', cache_control: cacheControl }], messages: [{ role: 'user', content: 'hi' }] },
+    { protocol: 'anthropic', options: opts }
+  );
+  assert.deepEqual(anthropic.system.map((b) => b.text), ['Host durable prefix', 'Overlay']);
+  assert.equal(anthropic.system[0].cache_control, cacheControl);
+
+  const chat = onRequest(
+    { model: 'gpt', messages: [{ role: 'system', content: 'Host durable prefix' }, { role: 'user', content: 'hi' }] },
+    { protocol: 'chat', options: opts }
+  );
+  assert.equal(chat.messages[0].content, 'Host durable prefix\n\nOverlay');
+
+  const gemini = onRequest(
+    { model: 'gemini', system_instruction: { parts: [{ text: 'Host durable prefix' }] }, contents: [{ role: 'user', parts: [{ text: 'hi' }] }] },
+    { protocol: 'gemini', options: opts }
+  );
+  assert.deepEqual(gemini.system_instruction.parts, [{ text: 'Host durable prefix' }, { text: 'Overlay' }]);
+});
+
+test('Anthropic strict mode inherits cache_control and single-turn once does not mutate historical user turns', () => {
+  const cacheControl = { type: 'ephemeral' };
+  const strictRes = onRequest(
+    { model: 'claude', system: [{ type: 'text', text: 'Host', cache_control: cacheControl }], messages: [{ role: 'user', content: 'hi' }] },
+    { protocol: 'anthropic', options: { enabled: true, defaultMode: 'strict', defaultPersonaId: 'p', personas: [{ id: 'p', template: 'Strict' }] } }
+  );
+  assert.equal(strictRes.system.length, 1);
+  assert.equal(strictRes.system[0].text, 'Strict');
+  assert.equal(strictRes.system[0].cache_control, cacheControl);
+
+  // Single-turn /route once strict should NOT retroactively scrub historical user turn 1
+  const multiTurn = {
+    model: 'claude',
+    messages: [
+      { role: 'system', content: 'Host' },
+      { role: 'user', content: '[Context: EMOTION SYSTEM — calm][Message sent-at: t1]First question' },
+      { role: 'assistant', content: 'First answer' },
+      { role: 'user', content: '[Context: EMOTION SYSTEM — calm][Message sent-at: t2]/route once strict Second question' }
+    ]
+  };
+  const onceRes = onRequest(multiTurn, { protocol: 'chat', agent: 'alma', options: { enabled: true, defaultMode: 'off', personas: [{ id: 'p', template: 'P' }] } });
+  assert.ok(onceRes.messages[1].content.includes('EMOTION SYSTEM'), 'turn 1 history must remain untouched for cache preservation');
+  assert.equal(onceRes.messages[3].content.includes('EMOTION SYSTEM'), false, 'current turn Alma context should still be scrubbed');
+});
+
+test('segmented prefix telemetry tracks cold -> none -> system breaks accurately', async () => {
+  const { clearRecentDecisions, getRecentDecisions } = await import('../src/hooks.js');
+  clearRecentDecisions();
+  const opts = { enabled: true, defaultMode: 'suffix', defaultPersonaId: 'p', personas: [{ id: 'p', template: 'Stable' }] };
+  const turn1 = { model: 'claude', cwd: '/repo/cache-test', messages: [{ role: 'system', content: 'Host' }, { role: 'user', content: 'Turn 1' }] };
+  const turn2 = {
+    model: 'claude',
+    cwd: '/repo/cache-test',
+    messages: [
+      { role: 'system', content: 'Host' },
+      { role: 'user', content: 'Turn 1' },
+      { role: 'assistant', content: 'Reply 1' },
+      { role: 'user', content: 'Turn 2' }
+    ]
+  };
+  const turn3 = { ...turn2, messages: [{ role: 'system', content: 'Changed Host' }, ...turn2.messages.slice(1)] };
+
+  onRequest(turn1, { protocol: 'chat', agent: 'codex', options: opts });
+  onRequest(turn2, { protocol: 'chat', agent: 'codex', options: opts });
+  onRequest(turn3, { protocol: 'chat', agent: 'codex', options: opts });
+
+  const recent = getRecentDecisions();
+  assert.equal(recent[0].prefixBreakSegment, 'cold');
+  assert.equal(recent[1].prefixBreakSegment, 'none');
+  assert.equal(recent[1].prefixHash, recent[0].prefixHash);
+  assert.equal(recent[2].prefixBreakSegment, 'system');
+  assert.notEqual(recent[2].prefixHash, recent[1].prefixHash);
 });

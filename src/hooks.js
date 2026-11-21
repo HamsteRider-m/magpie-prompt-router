@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -16,14 +17,19 @@ import {
 export const MAGPIE_IMMUTABLE_WIRE_KEYS = ['tools', 'tool_choice', 'function_call', 'functions', 'toolConfig', 'model', 'stream'];
 export const PROJECT_CONFIG_FILENAME = '.prompt-router.md';
 export const DEFAULT_TRACE_FILE = path.join(os.homedir(), '.config', 'magpie', 'prompt-router-recent.json');
-const ACTIVE_PROJECT_MODES = new Set(['strict', 'replace', 'fallback', 'append']);
+const ACTIVE_PROJECT_MODES = new Set(['strict', 'replace', 'fallback', 'append', 'suffix']);
 const originalBodies = new Map();
 const personaFiles = new Map();
+const lastPrefixSegments = new Map();
 const recentDecisions = [];
 const MAX_RECENT_DECISIONS = 20;
 const MAX_ORIGINALS = 64;
 const MAX_ORIGINAL_BYTES = 2 * 1024 * 1024;
 let originalBytes = 0;
+
+function shortHash(value, length = 12) {
+  return createHash('sha256').update(typeof value === 'string' ? value : JSON.stringify(value) || '').digest('hex').slice(0, length);
+}
 
 export function getRecentDecisions() {
   return recentDecisions.map((entry) => ({ ...entry }));
@@ -31,9 +37,40 @@ export function getRecentDecisions() {
 
 export function clearRecentDecisions() {
   recentDecisions.length = 0;
+  lastPrefixSegments.clear();
 }
 
-function recordDecision(config, envelope, action, changed) {
+function computePrefixTelemetry(body, protocol, envelope) {
+  const modelHash = shortHash(envelope.model);
+  const toolsHash = shortHash({
+    tools: body?.tools,
+    tool_choice: body?.tool_choice,
+    function_call: body?.function_call,
+    functions: body?.functions,
+    toolConfig: body?.toolConfig,
+    configTools: body?.config?.tools,
+    configToolConfig: body?.config?.toolConfig
+  });
+  const sysHash = shortHash(systemText(body, protocol));
+  const items = messageList(body, protocol).filter((item) => !['system', 'developer'].includes(text(item?.role).toLowerCase()));
+  const msgHashes = items.slice(0, Math.max(0, items.length - 1)).map((item) => shortHash(item, 8));
+  const prefixHash = shortHash(`${modelHash}:${toolsHash}:${sysHash}`);
+  const scopeKey = `${protocol}:${envelope.agent}:${envelope.cwd}`;
+  const prev = lastPrefixSegments.get(scopeKey);
+  let prefixBreakSegment = 'cold';
+  if (prev) {
+    if (prev.modelHash !== modelHash) prefixBreakSegment = 'model';
+    else if (prev.toolsHash !== toolsHash) prefixBreakSegment = 'tools';
+    else if (prev.sysHash !== sysHash) prefixBreakSegment = 'system';
+    else if (msgHashes.length < prev.msgHashes.length || prev.msgHashes.some((h, i) => msgHashes[i] !== h)) prefixBreakSegment = 'history';
+    else prefixBreakSegment = 'none';
+  }
+  lastPrefixSegments.set(scopeKey, { modelHash, toolsHash, sysHash, msgHashes });
+  if (lastPrefixSegments.size > MAX_ORIGINALS) lastPrefixSegments.delete(lastPrefixSegments.keys().next().value);
+  return { prefixHash, prefixBreakSegment };
+}
+
+function recordDecision(config, envelope, action, changed, telemetry = {}) {
   const entry = {
     ts: new Date().toISOString(),
     protocol: envelope.protocol,
@@ -43,7 +80,9 @@ function recordDecision(config, envelope, action, changed) {
     mode: action.mode,
     personaId: action.personaId || null,
     reason: action.reason,
-    changed
+    changed,
+    prefixHash: telemetry.prefixHash || null,
+    prefixBreakSegment: telemetry.prefixBreakSegment || 'cold'
   };
   recentDecisions.push(entry);
   if (recentDecisions.length > MAX_RECENT_DECISIONS) recentDecisions.shift();
@@ -51,8 +90,7 @@ function recordDecision(config, envelope, action, changed) {
     try {
       const target = path.resolve(config.traceFile || DEFAULT_TRACE_FILE);
       fs.mkdirSync(path.dirname(target), { recursive: true });
-      fs.writeFileSync(target, `${JSON.stringify(recentDecisions, null, 2)}
-`, 'utf8');
+      fs.writeFileSync(target, `${JSON.stringify(recentDecisions, null, 2)}\n`, 'utf8');
     } catch {}
   }
 }
@@ -138,10 +176,13 @@ function transformMessageText(message, transform, protocol, shouldTransform = nu
   return copy;
 }
 
-function mapUserMessages(body, protocol, transform) {
+function mapUserMessages(body, protocol, transform, latestOnly = false) {
   const key = protocol === 'gemini' ? 'contents' : Array.isArray(body.messages) ? 'messages' : 'input';
   if (!Array.isArray(body[key])) return body;
-  const copy = { ...body, [key]: body[key].map((item) => {
+  const userIndexes = body[key].map((item, idx) => ['user', 'human'].includes(text(item?.role || item?.speaker).toLowerCase()) ? idx : -1).filter((idx) => idx >= 0);
+  const lastUserIndex = userIndexes.at(-1);
+  const copy = { ...body, [key]: body[key].map((item, idx) => {
+    if (latestOnly && idx !== lastUserIndex) return item;
     if (!['user', 'human'].includes(text(item?.role || item?.speaker).toLowerCase()) || !messageText(item, protocol).includes('[Context:')) return item;
     return transformMessageText(item, transform, protocol, (value) => value.includes('[Context:'));
   }) };
@@ -183,6 +224,17 @@ function replaceSystem(body, protocol, persona, mode, renderedPersona, host) {
       const next = { ...(first || { role: 'system' }), content: renderedPersona };
       copy.messages = messages.filter((item) => !['system', 'developer'].includes(text(item?.role).toLowerCase()));
       copy.messages.splice(indexes[0] ?? 0, 0, next);
+    } else if (mode === 'suffix') {
+      if (!indexes.length) {
+        copy.messages = [{ role: 'system', content: renderedPersona }, ...messages];
+      } else {
+        const lastIdx = indexes.at(-1);
+        copy.messages = messages.map((item, index) => {
+          if (index !== lastIdx) return item;
+          const existing = contentText(item.content);
+          return transformMessageText(item, () => `${existing}\n\n${renderedPersona}`.trim(), protocol);
+        });
+      }
     } else {
       copy.messages = messages.map((item, index) => {
         if (!['system', 'developer'].includes(text(item?.role).toLowerCase())) return item;
@@ -209,6 +261,19 @@ function replaceSystem(body, protocol, persona, mode, renderedPersona, host) {
         copy.input.splice(indexes[0], 0, { ...(first || { role: 'system' }), content: formatResponsesSysContent(first, renderedPersona) });
       } else if (hasInstructions) copy.instructions = renderedPersona;
       else copy.input = [{ role: 'system', content: renderedPersona }, ...input];
+    } else if (mode === 'suffix') {
+      if (indexes.length) {
+        const lastIdx = indexes.at(-1);
+        copy.input = input.map((item, index) => {
+          if (index !== lastIdx) return item;
+          const existing = contentText(item.content);
+          return transformMessageText(item, () => `${existing}\n\n${renderedPersona}`.trim(), protocol);
+        });
+      } else if (hasInstructions) {
+        copy.instructions = `${body.instructions}\n\n${renderedPersona}`.trim();
+      } else {
+        copy.instructions = renderedPersona;
+      }
     } else {
       const current = hasInstructions ? body.instructions : contentText(first?.content);
       const scrubbed = mode === 'replace' ? scrubHostSystemPrompt(current, host) : current;
@@ -228,20 +293,28 @@ function replaceSystem(body, protocol, persona, mode, renderedPersona, host) {
   }
   if (protocol === 'anthropic') {
     const blocks = Array.isArray(body.system) ? body.system : body.system ? [{ type: 'text', text: body.system }] : [];
+    const inheritedCacheControl = blocks.find((block) => block && typeof block === 'object' && block.cache_control)?.cache_control;
     const nextBlocks = mode === 'strict'
-      ? [{ type: 'text', text: renderedPersona }]
-      : mode === 'replace'
-        ? [{ type: 'text', text: renderedPersona }, ...blocks.map((block) => ({ ...block, text: scrubHostSystemPrompt(text(block.text), host) })).filter((block) => block.text.trim() !== '')]
-        : [{ type: 'text', text: renderedPersona }, ...blocks.map((block) => ({ ...block }))];
+      ? [inheritedCacheControl ? { type: 'text', text: renderedPersona, cache_control: inheritedCacheControl } : { type: 'text', text: renderedPersona }]
+      : mode === 'suffix'
+        ? [...blocks.map((block) => ({ ...block })), { type: 'text', text: renderedPersona }]
+        : mode === 'replace'
+          ? [{ type: 'text', text: renderedPersona }, ...blocks.map((block) => ({ ...block, text: scrubHostSystemPrompt(text(block.text), host) })).filter((block) => block.text.trim() !== '')]
+          : [{ type: 'text', text: renderedPersona }, ...blocks.map((block) => ({ ...block }))];
     copy.system = nextBlocks;
     return copy;
   }
   const key = Object.hasOwn(body, 'system_instruction') ? 'system_instruction' : 'systemInstruction';
   const instruction = body[key] && typeof body[key] === 'object' ? { ...body[key] } : {};
   const parts = Array.isArray(instruction.parts) ? instruction.parts : [];
-  const cleaned = mode === 'replace' ? parts.map((part) => part?.text ? { ...part, text: scrubHostSystemPrompt(part.text, host) } : part) : parts.map((part) => ({ ...part }));
-  copy[key] = { ...instruction, parts: [{ text: renderedPersona }, ...cleaned] };
-  if (mode === 'strict') copy[key].parts = [{ text: renderedPersona }];
+  if (mode === 'strict') {
+    copy[key] = { ...instruction, parts: [{ text: renderedPersona }] };
+  } else if (mode === 'suffix') {
+    copy[key] = { ...instruction, parts: [...parts.map((part) => ({ ...part })), { text: renderedPersona }] };
+  } else {
+    const cleaned = mode === 'replace' ? parts.map((part) => part?.text ? { ...part, text: scrubHostSystemPrompt(part.text, host) } : part) : parts.map((part) => ({ ...part }));
+    copy[key] = { ...instruction, parts: [{ text: renderedPersona }, ...cleaned] };
+  }
   return copy;
 }
 
@@ -406,7 +479,8 @@ export function onRequest(body, ctx = {}) {
       next = replaceSystem(next, protocol, personaText, action.mode, personaText, host);
     }
     if (action.mode === 'replace' || action.mode === 'strict') {
-      next = mapUserMessages(next, protocol, scrubAlmaUserContext);
+      const singleTurnOverride = action.reason === 'directive-once' || action.reason === 'directive-@route';
+      next = mapUserMessages(next, protocol, scrubAlmaUserContext, singleTurnOverride);
     }
     if (!immutableKeysIntact(before, next)) {
       report(ctx, 'invalid', 0);
@@ -416,7 +490,8 @@ export function onRequest(body, ctx = {}) {
     const resultSerialized = JSON.stringify(next);
     const changed = sourceSerialized !== resultSerialized;
     if (changed) rememberOriginal(`${protocol}:${agent}:${resultSerialized}`, source, Buffer.byteLength(sourceSerialized));
-    recordDecision(config, envelope, action, changed);
+    const telemetry = computePrefixTelemetry(next, protocol, envelope);
+    recordDecision(config, envelope, action, changed, telemetry);
     report(ctx, changed ? 'ready' : 'skipped', changed ? reportBytes : 0);
     return changed ? next : undefined;
   } catch {

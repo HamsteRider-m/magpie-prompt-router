@@ -129,10 +129,11 @@ Auxiliary calls stay off by default. The plugin protects excluded models, memory
 
 | Mode | Behavior |
 | --- | --- |
-| `strict` | Replace all host system prompt entries with the selected persona. |
+| `strict` | Replace all host system prompt entries with the selected persona (inherits Anthropic `cache_control` if present). |
 | `replace` | Scrub host persona material and prepend the selected persona before the remaining host text. |
 | `fallback` | Act like `replace` when a custom persona is bound. Skip when the bound persona is still `builtin-example` or empty. |
 | `append` | Prepend the selected persona before the existing host prompt. |
+| `suffix` | **Cache-preserving tail append**: append the selected persona after the host system prompt, keeping the entire host durable prefix and Anthropic `cache_control` breakpoints intact. |
 | `off` | Leave the host prompt and user context unchanged. |
 
 The `{{cwd}}` placeholder expands to the request working directory when `keepCwd` is enabled. Strict mode appends the current working directory when the persona template has no placeholder and a working directory is available. The hook keeps `cwd` on the wire in every mode.
@@ -161,5 +162,21 @@ GitHub Actions workflows live under `.github/workflows/`:
 
 - `ci.yml`: Runs `npm test` (Node 20 & 22), `bun test`, and `npm run verify` (manifest checks, `npm pack --dry-run`, and clean-repo checks) on every push to `main` and every pull request.
 - `release.yml`: Triggers on `v*` tags (or manual dispatch with optional `dry_run`), verifies tests and tag-version parity, publishes to npm when `NPM_TOKEN` is configured, and creates a GitHub Release with the packed tarball.
+
+## Changelog
+
+### 2026-11-20
+
+- **Cache-preserving architecture**: Added `suffix` tail-append mode to preserve host durable prefixes byte-for-byte, inherited Anthropic `cache_control` breakpoints in `strict` mode, restricted single-turn `/route once` & `@route` Alma context scrubbing to the current turn so historical turns stay append-only, and added segmented `prefixHash` / `prefixBreakSegment` (`cold` / `none` / `model` / `tools` / `system` / `history`) telemetry.
+- **UX, observability & multi-gateway sync**: Smart single-turn activation (`replace`) when naming a persona under `defaultMode: "off"`, bounded 20-entry `getRecentDecisions()` ring buffer + opt-in `traceLog` (`mpr status --recent`), and `mpr export` / `mpr import` for syncing configs across Magpie instances.
+- **Repositioning, CLI, project auto-discovery & CI/CD**: Repositioned to `magpie-prompt-router` (`/route` & `@route`), added zero-dependency `mpr` CLI, `<cwd>/.prompt-router.md` hot-reload discovery, companion `SKILL.md`, `*jev*` default auxiliary exclusion, GitHub Actions CI/CD, and PM evaluation report (`docs/evaluation.md`).
+
+### 2026-11-18
+
+- **Formal invariant & bilingual docs**: Passed 407-case cross-protocol formal invariant verification and added English/Chinese README language switchers.
+
+### 2026-11-17
+
+- **Initial release**: Two-module deterministic routing engine + Magpie hooks across `chat`, `responses`, `anthropic`, and `gemini`, 7 immutable wire key guard, Alma/Pi/generic host scrubbing, account-fallback retry restoration, and zero-build settings page with live simulator.
 
 Licensed under the MIT License.

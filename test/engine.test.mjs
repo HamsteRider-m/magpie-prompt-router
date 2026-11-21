@@ -149,7 +149,7 @@ test('interpolates and removes an absent cwd placeholder', () => {
 });
 
 test('decides off when disabled and honors default persona mode', () => {
-  assert.deepEqual(ACTIVE_ROUTE_MODES, ['strict', 'replace', 'fallback', 'append']);
+  assert.deepEqual(ACTIVE_ROUTE_MODES, ['strict', 'replace', 'fallback', 'append', 'suffix']);
   assert.equal(parseRouterConfig().defaultMode, 'off');
   assert.equal(decideRouteAction({ userText: 'hello', userTurns: ['hello'] }, { enabled: false }).mode, 'off');
   const result = decideRouteAction({ userText: 'hello', userTurns: ['hello'] }, { defaultMode: 'strict' });

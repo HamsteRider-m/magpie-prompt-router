@@ -129,10 +129,11 @@ You are working in {{cwd}}. Answer concisely and follow repository conventions.
 
 | 模式 | 行为 |
 | --- | --- |
-| `strict` | 用选中的 persona 替换所有宿主系统提示词区块。 |
+| `strict` | 用选中的 persona 替换所有宿主系统提示词区块（自动继承 Anthropic 原块上的 `cache_control` 断点）。 |
 | `replace` | 清理宿主 persona 内容，并把选中的 persona 放在剩余宿主文本之前。 |
 | `fallback` | 绑定自定义 persona 时按 `replace` 执行。绑定的 persona 仍是 `builtin-example` 或内容为空时跳过。 |
 | `append` | 把选中的 persona 放在已有宿主提示词之前。 |
+| `suffix` | **缓存保活尾部追加**：把选中的 persona 追加到已有宿主提示词末尾，字节级保留宿主稳定前缀与 Anthropic `cache_control` 断点。 |
 | `off` | 不修改宿主提示词和用户上下文。 |
 
 启用 `keepCwd` 后，`{{cwd}}` 会替换为请求的工作目录。严格模式在模板没有占位符且请求有工作目录时，会附加当前工作目录。所有模式都会保留 wire 上的 `cwd`。
@@ -161,5 +162,21 @@ GitHub Actions 工作流位于 `.github/workflows/`：
 
 - `ci.yml`：在推送 `main` 与 PR 时自动运行 Node 20/22 `npm test`、`bun test` 与 `npm run verify`（清单校验、`npm pack --dry-run` 及历史残留检查）。
 - `release.yml`：推送 `v*` tag（或手动触发并可选 `dry_run`）时自动验证测试与版本号一致性，配置 `NPM_TOKEN` 后发布至 npm 并创建附带 `.tgz` 产物的 GitHub Release。
+
+## 更新日志（Changelog）
+
+### 2026-11-20
+
+- **缓存保活架构升级**：新增 `suffix` 尾部追加模式字节级保留宿主前缀；Anthropic `strict` 模式自动继承原 `cache_control` 断点；单轮 `/route once` 与 `@route` 仅清洗当前轮 Alma 上下文，避免回溯改写历史轮次破坏缓存；新增分段 `prefixHash` 与 `prefixBreakSegment`（`cold` / `none` / `model` / `tools` / `system` / `history`）缓存断链归因。
+- **体验、可观测性与多网关同步**：优化 `defaultMode: "off"` 下单轮显式人设自动按 `replace` 激活；新增 20 条有界内存决策环缓冲与可选 `traceLog`（`mpr status --recent`）；新增 `mpr export` / `mpr import` 支持多网关一键同步配置。
+- **重定位、终端 CLI、项目自动发现与 CI/CD**：正式更名为 `magpie-prompt-router`（`/route` & `@route`），新增零依赖 `mpr` CLI、`<cwd>/.prompt-router.md` 热重载自动发现、伴生 Skill、`*jev*` 默认排除、GitHub Actions CI/CD 与产品综合评估报告（`docs/evaluation.md`）。
+
+### 2026-11-18
+
+- **形式化不变量验证与双语文档**：通过 407 组跨协议形式化不变量验证，补齐中英文 README 顶部互链。
+
+### 2026-11-17
+
+- **初始版本**：落地两模块纯本地确定性路由引擎与 Magpie 四协议钩子（`chat` / `responses` / `anthropic` / `gemini`）、7 个不可变 wire 字段守卫、Alma/Pi/通用宿主清洗、账号 fallback 重试恢复及零构建设置页与实时模拟器。
 
 本项目使用 MIT License。
