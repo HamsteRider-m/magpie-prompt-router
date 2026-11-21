@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import {
   BUILTIN_PERSONA,
@@ -14,12 +15,47 @@ import {
 
 export const MAGPIE_IMMUTABLE_WIRE_KEYS = ['tools', 'tool_choice', 'function_call', 'functions', 'toolConfig', 'model', 'stream'];
 export const PROJECT_CONFIG_FILENAME = '.prompt-router.md';
+export const DEFAULT_TRACE_FILE = path.join(os.homedir(), '.config', 'magpie', 'prompt-router-recent.json');
 const ACTIVE_PROJECT_MODES = new Set(['strict', 'replace', 'fallback', 'append']);
 const originalBodies = new Map();
 const personaFiles = new Map();
+const recentDecisions = [];
+const MAX_RECENT_DECISIONS = 20;
 const MAX_ORIGINALS = 64;
 const MAX_ORIGINAL_BYTES = 2 * 1024 * 1024;
 let originalBytes = 0;
+
+export function getRecentDecisions() {
+  return recentDecisions.map((entry) => ({ ...entry }));
+}
+
+export function clearRecentDecisions() {
+  recentDecisions.length = 0;
+}
+
+function recordDecision(config, envelope, action, changed) {
+  const entry = {
+    ts: new Date().toISOString(),
+    protocol: envelope.protocol,
+    model: envelope.model,
+    agent: envelope.agent,
+    cwd: envelope.cwd,
+    mode: action.mode,
+    personaId: action.personaId || null,
+    reason: action.reason,
+    changed
+  };
+  recentDecisions.push(entry);
+  if (recentDecisions.length > MAX_RECENT_DECISIONS) recentDecisions.shift();
+  if (config.traceLog) {
+    try {
+      const target = path.resolve(config.traceFile || DEFAULT_TRACE_FILE);
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.writeFileSync(target, `${JSON.stringify(recentDecisions, null, 2)}
+`, 'utf8');
+    } catch {}
+  }
+}
 
 function text(value) {
   return typeof value === 'string' ? value : '';
@@ -380,6 +416,7 @@ export function onRequest(body, ctx = {}) {
     const resultSerialized = JSON.stringify(next);
     const changed = sourceSerialized !== resultSerialized;
     if (changed) rememberOriginal(`${protocol}:${agent}:${resultSerialized}`, source, Buffer.byteLength(sourceSerialized));
+    recordDecision(config, envelope, action, changed);
     report(ctx, changed ? 'ready' : 'skipped', changed ? reportBytes : 0);
     return changed ? next : undefined;
   } catch {

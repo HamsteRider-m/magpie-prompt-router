@@ -42,6 +42,8 @@ export function parseRouterConfig(rawOptions = {}) {
     bypassAuxiliary: options.bypassAuxiliary !== false,
     allowExcludedModelsOnOnce: options.allowExcludedModelsOnOnce === true,
     autoDiscoverProjectFile: options.autoDiscoverProjectFile !== false,
+    traceLog: options.traceLog === true,
+    traceFile: string(options.traceFile, ''),
     excludedModelGlobs,
     personas,
     rules
@@ -239,7 +241,8 @@ export function decideRouteAction(envelope = {}, rawOptions = {}, resolvedPerson
     return { mode: 'off', personaId: null, keepCwd: true, reason: config.enabled ? 'auxiliary' : 'disabled', userText: latest.text, directive: latest };
   }
   const rule = config.rules.find((candidate) => candidate.enabled !== false && ruleMatches(candidate, envelope));
-  const mode = latest.mode || rule?.mode || reduction.state.mode || config.defaultMode;
+  const inheritedMode = latest.mode || rule?.mode || reduction.state.mode || config.defaultMode;
+  const mode = !latest.mode && explicitOnce && latest.personaId && inheritedMode === 'off' ? 'replace' : inheritedMode;
   const personaId = latest.personaId || rule?.personaId || reduction.state.personaId || config.defaultPersonaId;
   const keepCwd = rule?.keepCwd ?? config.defaultKeepCwd;
   const active = explicitOnce || reduction.state.enabled;

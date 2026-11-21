@@ -151,4 +151,61 @@ test('CLI manages personas, rules, defaults, init-project, status, and dry-run t
   assert.equal(status.projectFile.mode, 'append');
   const savedPlugins = JSON.parse(fs.readFileSync(configPath, 'utf8')).plugins;
   assert.ok(savedPlugins.some((p) => p.spec === 'other-plugin'));
+
+  // export & import round-trip to a second gateway config
+  const exportFile = path.join(dir, 'router-backup.json');
+  runCli(['export', '--out', exportFile, '--config', configPath]);
+  const configPath2 = path.join(dir, 'plugins-hub.json');
+  fs.writeFileSync(configPath2, JSON.stringify({ plugins: [{ spec: 'hub-only-plugin' }] }, null, 2));
+  runCli(['import', exportFile, '--config', configPath2]);
+  const importedPersonas = JSON.parse(runCli(['persona', 'list', '--config', configPath2]));
+  assert.equal(importedPersonas.length, 1);
+  assert.equal(importedPersonas[0].id, 'arch');
+  const hubPlugins = JSON.parse(fs.readFileSync(configPath2, 'utf8')).plugins;
+  assert.ok(hubPlugins.some((p) => p.spec === 'hub-only-plugin'));
+});
+
+test('/route once <personaId> and @route <personaId> auto-activate replace under defaultMode off', () => {
+  const opts = { enabled: true, defaultMode: 'off', personas: [{ id: 'arch', template: 'Architect' }] };
+  const a1 = decideRouteAction({ protocol: 'chat', model: 'claude-sonnet-4', userText: '/route once arch Review', userTurns: ['/route once arch Review'] }, opts);
+  assert.equal(a1.mode, 'replace');
+  assert.equal(a1.personaId, 'arch');
+
+  const a2 = decideRouteAction({ protocol: 'chat', model: 'claude-sonnet-4', userText: '@route arch Review', userTurns: ['@route arch Review'] }, opts);
+  assert.equal(a2.mode, 'replace');
+  assert.equal(a2.personaId, 'arch');
+
+  // Explicit mode off still wins
+  const a3 = decideRouteAction({ protocol: 'chat', model: 'claude-sonnet-4', userText: '/route once arch off Review', userTurns: ['/route once arch off Review'] }, opts);
+  assert.equal(a3.mode, 'off');
+});
+
+test('onRequest records recent decisions and supports opt-in traceLog file read via mpr status --recent', () => {
+  const dir = mkTempDir('mpr-trace-');
+  const traceFile = path.join(dir, 'recent.json');
+  const configPath = path.join(dir, 'plugins.json');
+  fs.writeFileSync(configPath, JSON.stringify({ plugins: [] }, null, 2));
+
+  const body = {
+    model: 'claude-sonnet-4',
+    messages: [
+      { role: 'system', content: 'Host prompt' },
+      { role: 'user', content: '/route once arch Inspect' }
+    ]
+  };
+  const out = onRequest(body, {
+    protocol: 'chat',
+    agent: 'claude-code',
+    options: { enabled: true, defaultMode: 'off', traceLog: true, traceFile, personas: [{ id: 'arch', template: 'Architect' }] }
+  });
+  assert.ok(out);
+  assert.ok(fs.existsSync(traceFile));
+  const runCli = (args) => execFileSync(process.execPath, [cliPath, ...args], { encoding: 'utf8' });
+  const status = JSON.parse(runCli(['status', '--recent', '--trace-file', traceFile, '--config', configPath]));
+  assert.ok(Array.isArray(status.recentDecisions));
+  assert.ok(status.recentDecisions.length >= 1);
+  const last = status.recentDecisions.at(-1);
+  assert.equal(last.mode, 'replace');
+  assert.equal(last.personaId, 'arch');
+  assert.equal(last.changed, true);
 });

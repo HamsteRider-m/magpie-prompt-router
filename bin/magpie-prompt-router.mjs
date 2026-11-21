@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { decideRouteAction, MODES, parseRouterConfig } from '../src/engine.js';
-import { loadProjectPersona, PROJECT_CONFIG_FILENAME } from '../src/hooks.js';
+import { DEFAULT_TRACE_FILE, loadProjectPersona, PROJECT_CONFIG_FILENAME } from '../src/hooks.js';
 
 const DEFAULT_CONFIG_PATH = path.join(os.homedir(), '.config', 'magpie', 'plugins.json');
 const DEFAULT_SPEC = 'magpie-prompt-router';
@@ -12,7 +12,7 @@ function usage() {
   console.log(`magpie-prompt-router (mpr) — Terminal CLI for Magpie Prompt Router
 
 Usage:
-  mpr status [--config <path>] [--cwd <dir>]
+  mpr status [--recent] [--trace-file <path>] [--config <path>] [--cwd <dir>]
   mpr init-project [--dir <dir>] [--mode replace|strict|append|fallback] [--force]
   mpr persona list [--config <path>]
   mpr persona add <id> (--template <text> | --file <path>) [--name <name>] [--config <path>]
@@ -21,7 +21,9 @@ Usage:
   mpr rule add --persona <id> [--mode replace] [--cwd <glob>] [--model <glob>] [--agent <glob>] [--protocol <p>] [--keywords k1,k2] [--config <path>]
   mpr rule rm <1-based-index> [--config <path>]
   mpr bind-cwd <personaId> [--mode replace] [--cwd <dir>] [--config <path>]
-  mpr set-default [--mode off|replace|strict|fallback|append] [--persona <id>] [--auto-project on|off] [--config <path>]
+  mpr set-default [--mode off|replace|strict|fallback|append] [--persona <id>] [--auto-project on|off] [--trace on|off] [--config <path>]
+  mpr export [--out <file>] [--config <path>]
+  mpr import <file> [--config <path>]
   mpr test [--cwd <dir>] [--model <m>] [--agent <a>] [--protocol chat] [--user <text>] [--system <text>] [--config <path>]
 `);
 }
@@ -136,7 +138,7 @@ Answer directly, follow repository conventions, and keep changes focused.
     const cwd = path.resolve(flags.cwd || process.cwd());
     const projectRoute = loadProjectPersona(cwd);
     const cfg = parseRouterConfig(entry?.options || {});
-    console.log(JSON.stringify({
+    const out = {
       configPath,
       installed: Boolean(entry),
       spec: entry?.spec || null,
@@ -145,12 +147,22 @@ Answer directly, follow repository conventions, and keep changes focused.
       defaultMode: cfg.defaultMode,
       defaultPersonaId: cfg.defaultPersonaId,
       autoDiscoverProjectFile: cfg.autoDiscoverProjectFile,
+      traceLog: cfg.traceLog,
       excludedModelGlobs: cfg.excludedModelGlobs,
       personaCount: cfg.personas.length,
       ruleCount: cfg.rules.length,
       cwd,
       projectFile: projectRoute ? { path: projectRoute.persona.filePath, mode: projectRoute.mode } : null
-    }, null, 2));
+    };
+    if (flags.recent) {
+      const tracePath = path.resolve(flags['trace-file'] || cfg.traceFile || DEFAULT_TRACE_FILE);
+      try {
+        out.recentDecisions = fs.existsSync(tracePath) ? JSON.parse(fs.readFileSync(tracePath, 'utf8')) : [];
+      } catch {
+        out.recentDecisions = [];
+      }
+    }
+    console.log(JSON.stringify(out, null, 2));
     return;
   }
 
@@ -261,8 +273,39 @@ Answer directly, follow repository conventions, and keep changes focused.
     if (flags['auto-project'] !== undefined) {
       entry.options.autoDiscoverProjectFile = String(flags['auto-project']).toLowerCase() !== 'off' && String(flags['auto-project']).toLowerCase() !== 'false';
     }
+    if (flags.trace !== undefined) {
+      entry.options.traceLog = String(flags.trace).toLowerCase() === 'on' || String(flags.trace).toLowerCase() === 'true';
+    }
     writePluginsFile(configPath, data);
     console.log(`Updated defaults in ${configPath}`);
+    return;
+  }
+
+  if (cmd === 'export') {
+    const data = readPluginsFile(configPath);
+    const entry = findPluginEntry(data, flags.spec);
+    const payload = JSON.stringify(parseRouterConfig(entry?.options || {}), null, 2);
+    if (flags.out) {
+      const outPath = path.resolve(String(flags.out));
+      fs.mkdirSync(path.dirname(outPath), { recursive: true });
+      fs.writeFileSync(outPath, `${payload}
+`, 'utf8');
+      console.log(`Exported options to ${outPath}`);
+    } else {
+      console.log(payload);
+    }
+    return;
+  }
+
+  if (cmd === 'import') {
+    const inFile = sub;
+    if (!inFile) die('import requires <file>');
+    const imported = parseRouterConfig(JSON.parse(fs.readFileSync(path.resolve(inFile), 'utf8')));
+    const data = readPluginsFile(configPath);
+    const entry = ensurePluginEntry(data, flags.spec);
+    entry.options = imported;
+    writePluginsFile(configPath, data);
+    console.log(`Imported ${imported.personas.length} persona(s) and ${imported.rules.length} rule(s) into ${configPath}`);
     return;
   }
 

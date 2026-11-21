@@ -68,7 +68,8 @@
     if (auxiliary({ model: sample.model, systemText: sample.systemText, message: latest.prompt || sample.message }, config) && !(explicitOnce && (config.allowExcludedModelsOnOnce || !excluded(config).some(function (pattern) { return glob(sample.model, pattern); })))) return { mode: 'off', personaId: null, reason: 'auxiliary' };
     var rules = config.rules || [];
     var rule = rules.find(function (item) { return item.enabled !== false && (!item.workspaceGlob || glob(sample.workspace, item.workspaceGlob)) && (!item.modelGlob || glob(sample.model, item.modelGlob)) && (!item.agentGlob || glob(sample.agent, item.agentGlob)) && (!item.protocol || text(item.protocol).toLowerCase() === text(sample.protocol).toLowerCase()) && list(item.userKeywords).every(function (keyword) { return text(latest.prompt || sample.message).toLowerCase().indexOf(text(keyword).toLowerCase()) >= 0; }); });
-    var mode = latest.mode || (rule && rule.mode) || sticky.mode || config.defaultMode || 'off';
+    var inheritedMode = latest.mode || (rule && rule.mode) || sticky.mode || config.defaultMode || 'off';
+    var mode = (!latest.mode && explicitOnce && latest.personaId && inheritedMode === 'off') ? 'replace' : inheritedMode;
     var personaId = latest.personaId || (rule && rule.personaId) || sticky.personaId || config.defaultPersonaId || BUILTIN_PERSONA.id;
     if (explicitOnce || sticky.enabled) {
       var persona = personas[personaId] || BUILTIN_PERSONA;
