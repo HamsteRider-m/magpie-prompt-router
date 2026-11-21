@@ -2,18 +2,19 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {
   BUILTIN_PERSONA,
-  decidePurgeAction,
+  decideRouteAction,
   detectHostFamily,
   extractWorkspaceCwd,
   interpolatePersona,
-  parsePurgeConfig,
+  parseRouterConfig,
   parseUserTurnDirective,
   scrubAlmaUserContext,
   scrubHostSystemPrompt
 } from './engine.js';
-import { loadSomeMagicPresetMap, parsePersonaMarkdown, resolveSomeMagicFilePath } from './presets.js';
 
 export const MAGPIE_IMMUTABLE_WIRE_KEYS = ['tools', 'tool_choice', 'function_call', 'functions', 'toolConfig', 'model', 'stream'];
+export const PROJECT_CONFIG_FILENAME = '.prompt-router.md';
+const ACTIVE_PROJECT_MODES = new Set(['strict', 'replace', 'fallback', 'append']);
 const originalBodies = new Map();
 const personaFiles = new Map();
 const MAX_ORIGINALS = 64;
@@ -208,21 +209,65 @@ function replaceSystem(body, protocol, persona, mode, renderedPersona, host) {
   return copy;
 }
 
+export function parsePromptFile(raw) {
+  const source = text(raw);
+  const match = source.match(/^---\r?\n([\s\S]*?)\r?\n---\s*(?:\r?\n)?([\s\S]*)$/);
+  if (!match) return { meta: {}, body: source.trim() };
+  const meta = {};
+  for (const line of match[1].split(/\r?\n/)) {
+    const kv = line.match(/^\s*([A-Za-z_][\w-]*)\s*:\s*(.*?)\s*$/);
+    if (!kv) continue;
+    const key = kv[1];
+    let val = kv[2].replace(/^['"]|['"]$/g, '');
+    if (val === 'true') val = true;
+    else if (val === 'false') val = false;
+    meta[key] = val;
+  }
+  return { meta, body: match[2].trim() };
+}
+
+export function loadProjectPersona(cwd) {
+  if (!cwd) return null;
+  try {
+    const filePath = path.resolve(cwd, PROJECT_CONFIG_FILENAME);
+    const stat = fs.statSync(filePath);
+    if (!stat.isFile()) return null;
+    const cached = personaFiles.get(filePath);
+    if (!cached || cached.mtimeMs !== stat.mtimeMs || cached.size !== stat.size) {
+      const parsed = parsePromptFile(fs.readFileSync(filePath, 'utf8'));
+      personaFiles.set(filePath, { mtimeMs: stat.mtimeMs, size: stat.size, parsed });
+    }
+    const { meta, body } = personaFiles.get(filePath).parsed;
+    if (meta.enabled === false || !body) return null;
+    const rawMode = typeof meta.mode === 'string' ? meta.mode.toLowerCase() : 'replace';
+    const mode = ACTIVE_PROJECT_MODES.has(rawMode) ? rawMode : 'replace';
+    return {
+      mode: mode === 'fallback' ? 'replace' : mode,
+      keepCwd: typeof meta.keepCwd === 'boolean' ? meta.keepCwd : undefined,
+      persona: {
+        id: 'project-file',
+        name: typeof meta.name === 'string' && meta.name ? meta.name : PROJECT_CONFIG_FILENAME,
+        template: body,
+        filePath
+      }
+    };
+  } catch {
+    return null;
+  }
+}
+
 function loadPersonas(config) {
-  const map = loadSomeMagicPresetMap();
+  const map = {};
   for (const persona of config.personas) {
     if (!persona.filePath) {
       map[persona.id] = persona;
       continue;
     }
     try {
-      const filePath = resolveSomeMagicFilePath(persona.filePath);
+      const filePath = path.resolve(persona.filePath);
       const stat = fs.statSync(filePath);
       const cached = personaFiles.get(filePath);
-      if (!cached || cached.mtimeMs !== stat.mtimeMs || cached.size !== stat.size) {
-        const body = parsePersonaMarkdown(fs.readFileSync(filePath, 'utf8'), persona.id).body;
-        personaFiles.set(filePath, { mtimeMs: stat.mtimeMs, size: stat.size, content: body });
-      }
+      if (!cached || cached.mtimeMs !== stat.mtimeMs || cached.size !== stat.size) personaFiles.set(filePath, { mtimeMs: stat.mtimeMs, size: stat.size, content: parsePromptFile(fs.readFileSync(filePath, 'utf8')).body });
       map[persona.id] = { ...persona, template: personaFiles.get(filePath).content };
     } catch {
       map[persona.id] = persona;
@@ -294,10 +339,23 @@ export function onRequest(body, ctx = {}) {
     const source = restoreIfReentered(body, protocol, agent);
     const result = cloneBody(source);
     const before = immutableSnapshot(source);
-    const config = parsePurgeConfig(ctx.options || {});
+    const config = parseRouterConfig(ctx.options || {});
     const envelope = envelopeFor(result, protocol, ctx);
     const resolvedPersonas = loadPersonas(config);
-    const action = decidePurgeAction(envelope, config, resolvedPersonas);
+    let action = decideRouteAction(envelope, config, resolvedPersonas);
+    if (config.autoDiscoverProjectFile && action.mode === 'off' && action.reason === 'default' && envelope.cwd) {
+      const projectRoute = loadProjectPersona(envelope.cwd);
+      if (projectRoute) {
+        action = {
+          ...action,
+          mode: projectRoute.mode,
+          personaId: projectRoute.persona.id,
+          keepCwd: projectRoute.keepCwd ?? config.defaultKeepCwd,
+          reason: 'project-file',
+          persona: projectRoute.persona
+        };
+      }
+    }
     const knownPersonaIds = [...new Set([BUILTIN_PERSONA.id, ...Object.keys(resolvedPersonas)])];
     let next = result;
     let reportBytes = 0;

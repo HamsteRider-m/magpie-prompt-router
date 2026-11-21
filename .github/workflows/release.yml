@@ -1,0 +1,94 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Run verification and pack without publishing to npm or creating a GitHub Release'
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  verify:
+    name: Verify Release Candidate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Run Node test suite
+        run: npm test
+
+      - name: Run Bun test suite
+        run: bun test
+
+      - name: Verify package manifest and tarball
+        run: npm run verify
+
+      - name: Check git tag matches package.json version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          PKG_VERSION="$(node -p "require('./package.json').version")"
+          if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
+            echo "Tag version ($TAG_VERSION) does not match package.json version ($PKG_VERSION)"
+            exit 1
+          fi
+          echo "Verified tag v$TAG_VERSION matches package.json"
+
+  publish:
+    name: Publish npm & GitHub Release
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Pack release tarball
+        id: pack
+        run: |
+          TARBALL="$(npm pack --silent | tail -n 1)"
+          echo "tarball=$TARBALL" >> "$GITHUB_OUTPUT"
+          ls -lh "$TARBALL"
+
+      - name: Publish to npm
+        if: ${{ github.event_name == 'push' || inputs.dry_run != true }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -z "$NODE_AUTH_TOKEN" ]; then
+            echo "::notice::NPM_TOKEN secret is not configured; skipping npm publish."
+            exit 0
+          fi
+          npm publish --provenance --access public
+
+      - name: Create GitHub Release
+        if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" "${{ steps.pack.outputs.tarball }}" \
+            --generate-notes \
+            --title "$GITHUB_REF_NAME"

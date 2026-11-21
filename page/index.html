@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Purge Router</title>
+  <title>Prompt Router</title>
   <link rel="stylesheet" href="./style.css">
 </head>
 <body>
@@ -11,7 +11,7 @@
     <header class="topbar">
       <div>
         <p class="eyebrow">MAGPIE PLUGIN</p>
-        <h1>Purge Router</h1>
+        <h1>Prompt Router</h1>
       </div>
       <label class="switch"><span>Enabled</span><input id="enabled" type="checkbox"><i></i></label>
     </header>
@@ -26,7 +26,7 @@
       </div>
     </section>
     <section class="section">
-      <div class="section-title"><div><h2>Personas</h2><p>Use a prompt template, load a local Markdown file, or pick a some-magic preset (sync locally via <code>npx magpie-purge-presets</code>).</p></div><div class="section-actions"><select id="preset-select" aria-label="some-magic preset"></select><button id="add-preset" type="button">Add preset</button><button id="add-persona" type="button">Add persona</button></div></div>
+      <div class="section-title"><div><h2>Personas</h2><p>Use a prompt template or load one from a local Markdown file.</p></div><button id="add-persona" type="button">Add persona</button></div>
       <div id="personas" class="stack"></div>
     </section>
     <section class="section">
@@ -38,10 +38,9 @@
       <div class="grid controls"><label>Model<input id="sim-model" value="claude-sonnet"></label><label>Workspace<input id="sim-workspace" value="/workspace/app"></label><label>Agent<input id="sim-agent" value="codex"></label><label>Protocol<select id="sim-protocol"><option>chat</option><option>responses</option><option>anthropic</option><option>gemini</option></select></label><label class="wide">System prompt<textarea id="sim-system"></textarea></label><label class="wide">Message<textarea id="sim-message">Review this code</textarea></label></div>
       <button id="simulate" type="button">Test route</button>
     </section>
-    <section class="section reference"><h2>Chat commands</h2><div class="commands"><code>/purge on persona replace</code><code>@purge strict review this</code><code>/purge off</code></div></section>
+    <section class="section reference"><h2>Chat commands</h2><div class="commands"><code>/route on persona replace</code><code>/route once strict review this</code><code>@route strict review this</code><code>/route off</code></div></section>
   </main>
   <script src="_magpie/bridge.js"></script>
-  <script src="./presets.js"></script>
   <script src="./app.js"></script>
 </body>
 </html>

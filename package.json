@@ -1,52 +1,50 @@
 {
-  "name": "magpie-purge",
-  "version": "0.2.0",
-  "description": "Conditional system prompt router and persona switcher for the Magpie gateway with optional some-magic preset sync.",
+  "name": "magpie-prompt-router",
+  "version": "0.1.0",
+  "description": "Conditional system prompt routing plugin for Magpie with /route and @route chat directives, auxiliary-call protection, and host-context cleaning.",
   "type": "module",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/HamsteRider-m/magpie-purge.git"
+    "url": "git+https://github.com/HamsteRider-m/magpie-prompt-router.git"
   },
-  "homepage": "https://github.com/HamsteRider-m/magpie-purge#readme",
+  "homepage": "https://github.com/HamsteRider-m/magpie-prompt-router#readme",
   "bugs": {
-    "url": "https://github.com/HamsteRider-m/magpie-purge/issues"
+    "url": "https://github.com/HamsteRider-m/magpie-prompt-router/issues"
   },
   "keywords": [
     "magpie",
-    "magpie-gateway",
-    "magpie-hooks",
     "magpie-plugin",
-    "prompt-routing",
-    "persona"
+    "prompt-router",
+    "system-prompt",
+    "middleware"
   ],
   "files": [
     "src",
     "page",
-    "scripts/sync-some-magic.mjs",
+    "bin",
+    "skills",
     "docs",
     "README.md",
     "README.zh-CN.md",
     "LICENSE"
   ],
-  "bin": {
-    "magpie-purge-presets": "scripts/sync-some-magic.mjs"
-  },
   "scripts": {
     "test": "node --test test/*.test.mjs",
-    "sync-presets": "node ./scripts/sync-some-magic.mjs"
+    "verify": "node ./scripts/verify-package.mjs"
   },
   "engines": {
     "node": ">=20",
-    "bun": ">=1.4.2"
+    "bun": ">=1.3.0"
   },
   "magpie": {
     "hooks": "./src/hooks.js",
+    "icon": "data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2064%2064%22%20fill%3D%22none%22%3E%3Cdefs%3E%3ClinearGradient%20id%3D%22g%22%20x1%3D%228%22%20y1%3D%226%22%20x2%3D%2256%22%20y2%3D%2258%22%20gradientUnits%3D%22userSpaceOnUse%22%3E%3Cstop%20offset%3D%220%25%22%20stop-color%3D%22%233B82F6%22%2F%3E%3Cstop%20offset%3D%22100%25%22%20stop-color%3D%22%234F46E5%22%2F%3E%3C%2FlinearGradient%3E%3C%2Fdefs%3E%3Crect%20x%3D%224%22%20y%3D%224%22%20width%3D%2256%22%20height%3D%2256%22%20rx%3D%2214%22%20fill%3D%22url(%23g)%22%2F%3E%3Cpath%20d%3D%22M16%2032h12c5%200%206-12%2012-12h8M28%2032c5%200%206%2012%2012%2012h8%22%20stroke%3D%22%23fff%22%20stroke-width%3D%224%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%2F%3E%3Cpath%20d%3D%22M43%2015l5%205-5%205M43%2039l5%205-5%205%22%20stroke%3D%22%23fff%22%20stroke-width%3D%224%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%2F%3E%3Ccircle%20cx%3D%2216%22%20cy%3D%2232%22%20r%3D%223.5%22%20fill%3D%22%23fff%22%2F%3E%3C%2Fsvg%3E",
     "page": {
-      "title": "Purge Router",
+      "title": "Prompt Router",
       "titles": {
-        "zh": "提示词分流",
-        "en": "Purge Router"
+        "zh": "提示词路由",
+        "en": "Prompt Router"
       },
       "file": "page/index.html"
     },
@@ -61,10 +59,16 @@
       "excludedModelGlobs": [
         "*nmem*",
         "*embedding*",
-        "*rerank*"
+        "*rerank*",
+        "*jev*"
       ],
       "personas": [],
-      "rules": []
+      "rules": [],
+      "autoDiscoverProjectFile": true
     }
+  },
+  "bin": {
+    "magpie-prompt-router": "bin/magpie-prompt-router.mjs",
+    "mpr": "bin/magpie-prompt-router.mjs"
   }
 }

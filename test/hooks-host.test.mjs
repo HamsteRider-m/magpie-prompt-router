@@ -61,9 +61,8 @@ test('scrubs each system block and every Alma user context without changing imag
   assert.equal(result.messages[3].content[0].text.includes('FATIGUE SYSTEM'), false);
 });
 
-
-test('strips every purge directive on the wire across protocols and preserves multimodal parts', () => {
-  const directives = ['/purge on', '/purge off', '/purge once replace describe it', '@purge replace describe it'];
+test('strips every route directive on the wire across protocols and preserves multimodal parts', () => {
+  const directives = ['/route on', '/route off', '/route once replace describe it', '@route replace describe it'];
   const makeBody = (protocol, directive) => {
     const user = protocol === 'gemini'
       ? { role: 'user', parts: [{ inlineData: { mimeType: 'image/png', data: 'abc' } }, { text: directive }] }
@@ -81,20 +80,20 @@ test('strips every purge directive on the wire across protocols and preserves mu
         : (protocol === 'responses' ? result.input.find((item) => item.role === 'user') : result.messages.find((item) => item.role === 'user'));
       const parts = protocol === 'gemini' ? user.parts : user.content;
       assert.equal(parts[0].inlineData?.data || parts[0].image_url?.url, protocol === 'gemini' ? 'abc' : 'data:image/png;base64,abc');
-      assert.equal(parts[1].text.includes('/purge') || parts[1].text.includes('@purge'), false, `${protocol} ${directive}`);
+      assert.equal(parts[1].text.includes('/route') || parts[1].text.includes('@route'), false, `${protocol} ${directive}`);
     }
   }
 
   const body = { model: 'gpt', messages: [{ role: 'user', content: [
     { type: 'image_url', image_url: { url: 'data:image/png;base64,abc' } },
     { type: 'text', text: 'Part 1 note' },
-    { type: 'text', text: '[Context: private][Message sent-at: now] /purge once replace describe it' }
+    { type: 'text', text: '[Context: private][Message sent-at: now] /route once replace describe it' }
   ] }] };
   const result = onRequest(body, context('chat', { options: { ...options, defaultMode: 'strict' } }));
   const userMessage = result.messages.find((item) => item.role === 'user');
   assert.equal(userMessage.content[0].image_url.url, 'data:image/png;base64,abc');
   assert.equal(userMessage.content[1].text, 'Part 1 note');
-  assert.equal(userMessage.content[2].text.includes('/purge'), false);
+  assert.equal(userMessage.content[2].text.includes('/route'), false);
   assert.equal(userMessage.content[2].text.includes('Part 1 note'), false);
 });
 
@@ -103,6 +102,7 @@ test('filters empty Anthropic blocks after Alma replace scrubbing', () => {
   const result = onRequest(body, context('anthropic', { options: { ...options, defaultMode: 'replace' } }));
   assert.equal(result.system.some((block) => block.text === ''), false);
 });
+
 test('keeps all seven immutable wire values structurally unchanged', () => {
   const body = { model: 'gpt', tools: [{ name: 'tool' }], tool_choice: { type: 'auto' }, function_call: { name: 'f' }, functions: [{ name: 'f' }], toolConfig: { mode: 'AUTO' }, stream: true, config: { tools: [{ name: 'nested' }], toolConfig: { mode: 'ANY' } }, messages: [{ role: 'user', content: 'hello' }] };
   const result = onRequest(body, context('chat'));
@@ -119,7 +119,7 @@ test('restores an exact re-entered body without retry metadata', () => {
 });
 
 test('reloads a file persona after mtime and size change', async () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'magpie-purge-'));
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'magpie-prompt-router-'));
   const filePath = path.join(directory, 'persona.md');
   fs.writeFileSync(filePath, 'first persona');
   const body = { model: 'gpt', messages: [{ role: 'system', content: 'host' }, { role: 'user', content: 'hello' }] };
@@ -149,7 +149,7 @@ test('rewrites Alma Responses directives on the wire and protects auxiliary call
     model: 'claude-sonnet-4-6',
     input: [
       { role: 'system', content: [{ type: 'input_text', text: almaSys }] },
-      { role: 'user', content: [{ type: 'input_text', text: '[Context: EMOTION SYSTEM — calm][Message sent-at: 2026-11-17T12:00:00Z]' }, { type: 'input_text', text: '/purge once strict Review this' }] }
+      { role: 'user', content: [{ type: 'input_text', text: '[Context: EMOTION SYSTEM — calm][Message sent-at: 2026-11-17T12:00:00Z]' }, { type: 'input_text', text: '/route once strict Review this' }] }
     ]
   };
   const onceResult = onRequest(reqOnce, { protocol: 'responses', agent: 'alma', options: safeOpts });
@@ -161,18 +161,18 @@ test('rewrites Alma Responses directives on the wire and protects auxiliary call
     model: 'claude-sonnet-4-6',
     input: [
       { role: 'system', content: [{ type: 'input_text', text: almaSys }] },
-      { role: 'user', content: [{ type: 'input_text', text: '[Context: EMOTION SYSTEM — calm][Message sent-at: 2026-11-17T12:00:00Z]\n/purge on persona replace' }] }
+      { role: 'user', content: [{ type: 'input_text', text: '[Context: EMOTION SYSTEM — calm][Message sent-at: 2026-11-17T12:00:00Z]\n/route on persona replace' }] }
     ]
   };
   const onResult = onRequest(reqOn, { protocol: 'responses', agent: 'alma', options: safeOpts });
-  assert.match(onResult.input[1].content[0].text, /magpie-purge: state -> enabled/);
+  assert.match(onResult.input[1].content[0].text, /magpie-prompt-router: state -> enabled/);
   assert.equal(onResult.input[0].content[0].text.includes('Warm.'), false);
 
   const reqAux = {
     model: 'alma-nmem',
     input: [
       { role: 'system', content: [{ type: 'input_text', text: 'Return JSON for memory extraction.' }] },
-      { role: 'user', content: [{ type: 'input_text', text: '/purge on persona strict' }] },
+      { role: 'user', content: [{ type: 'input_text', text: '/route on persona strict' }] },
       { role: 'user', content: [{ type: 'input_text', text: 'extract memories' }] }
     ]
   };

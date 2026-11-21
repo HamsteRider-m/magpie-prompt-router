@@ -1,9 +1,9 @@
 const MODES = new Set(['strict', 'replace', 'fallback', 'append', 'off']);
-const DEFAULT_EXCLUDED_MODELS = ['*nmem*', '*embedding*', '*rerank*'];
+const DEFAULT_EXCLUDED_MODELS = ['*nmem*', '*embedding*', '*rerank*', '*jev*'];
 const ALMA_NEXT_SECTION = String.raw`(?=\n(?:PERSONALITY:|EMOTION SYSTEM\s+[\u2014:-]|FATIGUE SYSTEM:|SELFIE ALBUM\s+[\u2014:-]|SYSTEM INFO\s+-|WORKING DIRECTORY\s+-|ARTIFACT SIDEBAR\s+-|THREAD ID\s+-|OUTPUTS CONVENTION\s+-|DATE AWARENESS|USER PROFILE|GLOBAL CONFIG DIRECTORY|PEOPLE PROFILE FORMAT|SKILLS FIRST|ALMA CLI|AGENTIC EXECUTION|COMMITMENT ENFORCEMENT|PROGRESS REPORTING|DELEGATION STAYS IN THE TURN|PROACTIVE UPDATES|WORKSPACE HYGIENE|ACCEPTANCE ON THE TASK|LAND THE ANSWER EARLY|SELF-EVOLUTION|AGENT DELEGATION|DEEP LINKS|WEB LINKS|INFOGRAPHIC VISUALIZATION|LIVE CODING MUSIC|TODAY'S TIME-CLUE REFERENCES|TOOL DISCOVERY|MANAGED AGENT CREW|READ-ONLY AUTHORITY|<[a-zA-Z_][\w-]*>|#{1,3}\s)|$)`;
 const ALMA_CONTEXT_SECTION_END = String.raw`(?=\]\s*(?:\n|$)|\n(?:EMOTION SYSTEM|FATIGUE SYSTEM|SELFIE ALBUM|Relevant Memories|## Relevant Memories|<[a-zA-Z_][\w-]*>)|$)`;
 
-export const ACTIVE_PURGE_MODES = [...MODES].filter((mode) => mode !== 'off');
+export const ACTIVE_ROUTE_MODES = [...MODES].filter((mode) => mode !== 'off');
 export const BUILTIN_PERSONA = {
   id: 'builtin-example',
   name: 'Concise neutral',
@@ -27,7 +27,7 @@ function normalizePath(value) {
   return string(value).replace(/\\/g, '/').replace(/\/+/g, '/');
 }
 
-export function parsePurgeConfig(rawOptions = {}) {
+export function parseRouterConfig(rawOptions = {}) {
   const options = rawOptions && typeof rawOptions === 'object' ? rawOptions : {};
   const personas = Array.isArray(options.personas) ? options.personas.filter((item) => item && typeof item.id === 'string') : [];
   const rules = Array.isArray(options.rules) ? options.rules.filter((item) => item && typeof item === 'object') : [];
@@ -41,6 +41,7 @@ export function parsePurgeConfig(rawOptions = {}) {
     defaultKeepCwd: options.defaultKeepCwd !== false,
     bypassAuxiliary: options.bypassAuxiliary !== false,
     allowExcludedModelsOnOnce: options.allowExcludedModelsOnOnce === true,
+    autoDiscoverProjectFile: options.autoDiscoverProjectFile !== false,
     excludedModelGlobs,
     personas,
     rules
@@ -93,11 +94,11 @@ function replaceHumanSlice(rawTurnText, humanText) {
 }
 
 function parseDirectiveLine(text, knownPersonaIds) {
-  const match = text.match(/^\s*(\/purge|@purge)\b(?:\s+([\s\S]*))?$/i);
+  const match = text.match(/^\s*(\/route|@route)\b(?:\s+([\s\S]*))?$/i);
   if (!match) return null;
   const command = match[1].toLowerCase();
   const rest = string(match[2]).trim();
-  if (command === '/purge') {
+  if (command === '/route') {
     const commandMatch = rest.match(/^(on|off|once)\b(?:\s+([\s\S]*))?$/i);
     if (!commandMatch) return null;
     const action = commandMatch[1].toLowerCase();
@@ -125,7 +126,7 @@ export function parseUserTurnDirective(rawTurnText, knownPersonaIds = []) {
   const directive = parseDirectiveLine(slice.human, new Set(knownPersonaIds));
   if (!directive) return { matched: false, rawText: rawTurnText, text: rawTurnText };
   const prompt = directive.prompt || (directive.command === 'on' || directive.command === 'off'
-    ? `[magpie-purge: state -> ${directive.command === 'on' ? 'enabled' : 'disabled'}. Acknowledge in one short sentence.]`
+    ? `[magpie-prompt-router: state -> ${directive.command === 'on' ? 'enabled' : 'disabled'}. Acknowledge in one short sentence.]`
     : directive.prompt);
   return {
     matched: true,
@@ -168,7 +169,7 @@ function hasMainAgentMarker(envelope) {
   return /WORKING DIRECTORY|Current working directory|<cwd>/i.test(string(envelope.systemText));
 }
 
-export function classifyAuxiliaryCall(envelope = {}, config = parsePurgeConfig()) {
+export function classifyAuxiliaryCall(envelope = {}, config = parseRouterConfig()) {
   const model = string(envelope.model);
   if (config.excludedModelGlobs.some((glob) => matchesGlob(model, glob))) return true;
   const system = string(envelope.systemText);
@@ -226,14 +227,14 @@ function personaMap(config, resolvedPersonaMap = {}) {
   return { ...map, ...resolvedPersonaMap };
 }
 
-export function decidePurgeAction(envelope = {}, rawOptions = {}, resolvedPersonaMap = {}) {
-  const config = parsePurgeConfig(rawOptions);
+export function decideRouteAction(envelope = {}, rawOptions = {}, resolvedPersonaMap = {}) {
+  const config = parseRouterConfig(rawOptions);
   const knownPersonaIds = Object.keys(personaMap(config, resolvedPersonaMap));
   const history = Array.isArray(envelope.userTurns) ? envelope.userTurns : [];
   const reduction = reduceThreadDirectives(history, knownPersonaIds);
   const latest = reduction.turns.at(-1) || { matched: false, text: envelope.userText || '' };
   const auxiliary = classifyAuxiliaryCall({ ...envelope, userText: latest.text }, config);
-  const explicitOnce = latest.matched && (latest.command === 'once' || latest.command === '@purge');
+  const explicitOnce = latest.matched && (latest.command === 'once' || latest.command === '@route');
   if (!config.enabled || (auxiliary && !(explicitOnce && (config.allowExcludedModelsOnOnce || !config.excludedModelGlobs.some((glob) => matchesGlob(envelope.model, glob)))))) {
     return { mode: 'off', personaId: null, keepCwd: true, reason: config.enabled ? 'auxiliary' : 'disabled', userText: latest.text, directive: latest };
   }
