@@ -2,11 +2,13 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { decideRouteAction, MODES, parseRouterConfig } from '../src/engine.js';
 import { DEFAULT_TRACE_FILE, loadProjectPersona, PROJECT_CONFIG_FILENAME } from '../src/hooks.js';
 
 const DEFAULT_CONFIG_PATH = path.join(os.homedir(), '.config', 'magpie', 'plugins.json');
 const DEFAULT_SPEC = 'magpie-prompt-router';
+const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 function usage() {
   console.log(`magpie-prompt-router (mpr) — Terminal CLI for Magpie Prompt Router
@@ -65,6 +67,23 @@ function writePluginsFile(configPath, data) {
   fs.renameSync(tmp, configPath);
 }
 
+function isLocalPackageSpec(spec) {
+  if (typeof spec !== 'string' || !spec.trim()) return false;
+  try {
+    const resolved = path.resolve(spec);
+    if (!fs.existsSync(resolved) || !fs.statSync(resolved).isDirectory()) return false;
+    const realSpec = fs.realpathSync(resolved);
+    const realRoot = fs.existsSync(PACKAGE_ROOT) ? fs.realpathSync(PACKAGE_ROOT) : PACKAGE_ROOT;
+    if (realSpec === realRoot) return true;
+    const pkgPath = path.join(resolved, 'package.json');
+    if (!fs.existsSync(pkgPath)) return false;
+    const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+    return pkg?.name === 'magpie-prompt-router';
+  } catch {
+    return false;
+  }
+}
+
 function findPluginEntry(data, specOverride) {
   if (specOverride) {
     return data.plugins.find((item) => item && item.spec === specOverride) || null;
@@ -72,6 +91,7 @@ function findPluginEntry(data, specOverride) {
   return (
     data.plugins.find((item) => typeof item?.spec === 'string' && item.spec.includes('magpie-prompt-router')) ||
     data.plugins.find((item) => typeof item?.spec === 'string' && item.spec.includes('prompt-router')) ||
+    data.plugins.find((item) => isLocalPackageSpec(item?.spec)) ||
     null
   );
 }

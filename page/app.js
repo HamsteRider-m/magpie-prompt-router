@@ -14,10 +14,15 @@
   function list(value) { return Array.isArray(value) ? value : text(value).split(',').map(function (item) { return item.trim(); }).filter(Boolean); }
   function excluded(config) { return config.excludedModelGlobs === undefined ? defaults.excludedModelGlobs : list(config.excludedModelGlobs); }
   function glob(valueText, pattern) { var escaped = text(pattern || '*').replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.'); return new RegExp('^' + escaped + '$', 'i').test(text(valueText)); }
+  var GA_TAIL_BLOCK_RE = /(?:\r?\n){2,}(?=<nmem_context\b|<project_rules\b|<skill_pointers\b|\[Role Instructions\]|\[Role:\s|\[Long-Task & Delegation Guard\]|\[T3 Workspace\]|\[Pre-existing dirty|\[Git )/;
   function getHumanSlice(rawTurn) {
     var message = text(rawTurn);
     var sentAt = message.indexOf('[Message sent-at:');
-    if (sentAt < 0) return { human: message };
+    if (sentAt < 0) {
+      var tailMatch = message.match(GA_TAIL_BLOCK_RE);
+      if (tailMatch && tailMatch.index > 0) return { human: message.slice(0, tailMatch.index) };
+      return { human: message };
+    }
     var sentAtEnd = message.indexOf(']', sentAt);
     if (sentAtEnd < 0) return { human: message };
     var humanStart = sentAtEnd + 1;
@@ -26,25 +31,44 @@
     return { human: message.slice(humanStart, guidelines < 0 ? message.length : guidelines) };
   }
 
+  function peelLeadingOverrides(source, personaIds) {
+    var rest = text(source);
+    var overrides = {};
+    for (var i = 0; i < 2; i += 1) {
+      var tokenMatch = rest.match(/^[ \t]*(\S+)([ \t]*\r?\n|[ \t]+|$)/);
+      if (!tokenMatch) break;
+      var token = tokenMatch[1];
+      var sep = tokenMatch[2] || '';
+      if (!overrides.personaId && personaIds.has(token)) overrides.personaId = token;
+      else if (!overrides.mode && MODES.includes(token.toLowerCase())) overrides.mode = token.toLowerCase();
+      else break;
+      rest = rest.slice(tokenMatch[0].length);
+      if (sep.indexOf('\n') >= 0) break;
+    }
+    return { personaId: overrides.personaId, mode: overrides.mode, prompt: rest.replace(/^\r?\n+/, '').trimEnd() };
+  }
+
   function parseDirective(message, personaIds) {
-    var match = getHumanSlice(message).human.match(/^\s*(\/route|@route)\b(?:\s+([\s\S]*))?$/i);
+    var match = getHumanSlice(message).human.match(/^\s*(\/route|@route)\b([ \t]*\r?\n|[ \t]+|$)([\s\S]*)$/i);
     if (!match) return null;
     var command = match[1].toLowerCase();
-    var tokens = text(match[2]).trim().split(/\s+/).filter(Boolean);
-    var result = { command: command, prompt: '' };
+    var sep = match[2] || '';
+    var rest = text(match[3]);
     if (command === '/route') {
-      if (!['on', 'off', 'once'].includes((tokens[0] || '').toLowerCase())) return null;
-      result.command = tokens.shift().toLowerCase();
-      if (result.command === 'off') {
-        result.prompt = tokens.join(' ');
-        return result;
-      }
+      if (!sep || sep.indexOf('\n') >= 0) return null;
+      var commandMatch = rest.match(/^(on|off|once)\b([ \t]*\r?\n|[ \t]+|$)([\s\S]*)$/i);
+      if (!commandMatch) return null;
+      var action = commandMatch[1].toLowerCase();
+      var actionSep = commandMatch[2] || '';
+      var tail = text(commandMatch[3]);
+      if (action === 'off') return { command: action, prompt: tail.replace(/^\r?\n+/, '').trimEnd() };
+      if (!actionSep || actionSep.indexOf('\n') >= 0) return { command: action, prompt: tail.replace(/^\r?\n+/, '').trimEnd() };
+      var peeled = peelLeadingOverrides(tail, personaIds);
+      return { command: action, personaId: peeled.personaId, mode: peeled.mode, prompt: peeled.prompt };
     }
-    if (personaIds.has(tokens[0])) result.personaId = tokens.shift();
-    if (MODES.includes(text(tokens[0]).toLowerCase())) result.mode = tokens.shift().toLowerCase();
-    if (!result.personaId && personaIds.has(tokens[0])) result.personaId = tokens.shift();
-    result.prompt = tokens.join(' ');
-    return result;
+    if (!sep || sep.indexOf('\n') >= 0) return { command: command, prompt: rest.replace(/^\r?\n+/, '').trimEnd() };
+    var atPeeled = peelLeadingOverrides(rest, personaIds);
+    return { command: command, personaId: atPeeled.personaId, mode: atPeeled.mode, prompt: atPeeled.prompt };
   }
   function auxiliary(sample, config) {
     if (excluded(config).some(function (pattern) { return glob(sample.model, pattern); })) return true;
@@ -61,7 +85,8 @@
     var personaIds = new Set(Object.keys(personas));
     var turns = list(sample.userTurns || [sample.message]);
     var sticky = { enabled: true, mode: null, personaId: null };
-    var parsed = turns.map(function (turn) { var item = parseDirective(turn, personaIds); if (item) { if (item.command === 'on') { sticky.enabled = true; sticky.mode = item.mode || sticky.mode; sticky.personaId = item.personaId || sticky.personaId; } else if (item.command === 'off') { sticky.enabled = false; sticky.mode = 'off'; } } return item; });
+    var previousActiveMode = null;
+    var parsed = turns.map(function (turn) { var item = parseDirective(turn, personaIds); if (item) { if (item.command === 'on') { sticky.enabled = true; var resumedMode = sticky.mode === 'off' ? previousActiveMode : sticky.mode; sticky.mode = item.mode || resumedMode; if (sticky.mode && sticky.mode !== 'off') previousActiveMode = sticky.mode; sticky.personaId = item.personaId || sticky.personaId; } else if (item.command === 'off') { if (sticky.mode && sticky.mode !== 'off') previousActiveMode = sticky.mode; sticky.enabled = false; sticky.mode = 'off'; } } return item; });
     var latest = parsed[parsed.length - 1] || { prompt: text(sample.message), command: null };
     var explicitOnce = latest.command === 'once' || latest.command === '@route';
     if (config.enabled === false) return { mode: 'off', personaId: null, reason: 'disabled' };

@@ -221,7 +221,13 @@ function replaceSystem(body, protocol, persona, mode, renderedPersona, host) {
     const indexes = messages.map((item, index) => ['system', 'developer'].includes(text(item?.role).toLowerCase()) ? index : -1).filter((index) => index >= 0);
     const first = messages[indexes[0]];
     if (mode === 'strict') {
-      const next = { ...(first || { role: 'system' }), content: renderedPersona };
+      const inheritedCacheControl = Array.isArray(first?.content)
+        ? first.content.find((part) => part && typeof part === 'object' && part.cache_control)?.cache_control
+        : undefined;
+      const content = inheritedCacheControl
+        ? [{ type: 'text', text: renderedPersona, cache_control: inheritedCacheControl }]
+        : renderedPersona;
+      const next = { ...(first || { role: 'system' }), content };
       copy.messages = messages.filter((item) => !['system', 'developer'].includes(text(item?.role).toLowerCase()));
       copy.messages.splice(indexes[0] ?? 0, 0, next);
     } else if (mode === 'suffix') {
@@ -231,6 +237,15 @@ function replaceSystem(body, protocol, persona, mode, renderedPersona, host) {
         const lastIdx = indexes.at(-1);
         copy.messages = messages.map((item, index) => {
           if (index !== lastIdx) return item;
+          if (Array.isArray(item.content) && item.content.some((part) => part && typeof part === 'object' && part.cache_control)) {
+            return {
+              ...item,
+              content: [
+                ...item.content.map((part) => (part && typeof part === 'object' ? { ...part } : part)),
+                { type: 'text', text: renderedPersona }
+              ]
+            };
+          }
           const existing = contentText(item.content);
           return transformMessageText(item, () => `${existing}\n\n${renderedPersona}`.trim(), protocol);
         });
@@ -452,7 +467,8 @@ export function onRequest(body, ctx = {}) {
     const envelope = envelopeFor(result, protocol, ctx);
     const resolvedPersonas = loadPersonas(config);
     let action = decideRouteAction(envelope, config, resolvedPersonas);
-    if (config.autoDiscoverProjectFile && action.mode === 'off' && action.reason === 'default' && envelope.cwd) {
+    const allowProjectAutoDiscover = action.reason === 'default' || (action.reason === 'directive-on' && !action.directive?.mode);
+    if (config.autoDiscoverProjectFile && action.mode === 'off' && allowProjectAutoDiscover && envelope.cwd) {
       const projectRoute = loadProjectPersona(envelope.cwd);
       if (projectRoute) {
         action = {

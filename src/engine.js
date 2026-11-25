@@ -2,6 +2,7 @@ const MODES = new Set(['strict', 'replace', 'fallback', 'append', 'suffix', 'off
 const DEFAULT_EXCLUDED_MODELS = ['*nmem*', '*embedding*', '*rerank*', '*jev*'];
 const ALMA_NEXT_SECTION = String.raw`(?=\n(?:PERSONALITY:|EMOTION SYSTEM\s+[\u2014:-]|FATIGUE SYSTEM:|SELFIE ALBUM\s+[\u2014:-]|SYSTEM INFO\s+-|WORKING DIRECTORY\s+-|ARTIFACT SIDEBAR\s+-|THREAD ID\s+-|OUTPUTS CONVENTION\s+-|DATE AWARENESS|USER PROFILE|GLOBAL CONFIG DIRECTORY|PEOPLE PROFILE FORMAT|SKILLS FIRST|ALMA CLI|AGENTIC EXECUTION|COMMITMENT ENFORCEMENT|PROGRESS REPORTING|DELEGATION STAYS IN THE TURN|PROACTIVE UPDATES|WORKSPACE HYGIENE|ACCEPTANCE ON THE TASK|LAND THE ANSWER EARLY|SELF-EVOLUTION|AGENT DELEGATION|DEEP LINKS|WEB LINKS|INFOGRAPHIC VISUALIZATION|LIVE CODING MUSIC|TODAY'S TIME-CLUE REFERENCES|TOOL DISCOVERY|MANAGED AGENT CREW|READ-ONLY AUTHORITY|<[a-zA-Z_][\w-]*>|#{1,3}\s)|$)`;
 const ALMA_CONTEXT_SECTION_END = String.raw`(?=\]\s*(?:\n|$)|\n(?:EMOTION SYSTEM|FATIGUE SYSTEM|SELFIE ALBUM|Relevant Memories|## Relevant Memories|<[a-zA-Z_][\w-]*>)|$)`;
+const GA_TAIL_BLOCK_RE = /(?:\r?\n){2,}(?=<nmem_context\b|<project_rules\b|<skill_pointers\b|\[Role Instructions\]|\[Role:\s|\[Long-Task & Delegation Guard\]|\[T3 Workspace\]|\[Pre-existing dirty|\[Git )/;
 
 export const ACTIVE_ROUTE_MODES = [...MODES].filter((mode) => mode !== 'off');
 export const BUILTIN_PERSONA = {
@@ -55,13 +56,17 @@ export function extractWorkspaceCwd(systemText = '') {
   const patterns = [
     /WORKING DIRECTORY\s*[-\u2014:]\s*Your working directory for this conversation is:\s*([^\n<]+)/i,
     /<environment>[\s\S]*?Working directory:\s*([^\n<]+)/i,
+    /working directory\s*:\s*`([^`\n]+)`/i,
     /Current working directory:\s*([^\n<]+)/i,
     /Working directory:\s*([^\n<]+)/i,
     /<cwd>([^<]+)<\/cwd>/i
   ];
   for (const pattern of patterns) {
     const match = text.match(pattern);
-    if (match) return normalizePath(match[1].trim());
+    if (match) {
+      const cleaned = match[1].trim().replace(/^['"`]|['"`]$/g, '').trim();
+      if (cleaned) return normalizePath(cleaned);
+    }
   }
   return '';
 }
@@ -80,7 +85,13 @@ export function interpolatePersona(template, cwd = '') {
 function getHumanSlice(rawTurnText) {
   const text = string(rawTurnText);
   const sentAt = text.indexOf('[Message sent-at:');
-  if (sentAt < 0) return { prefix: '', human: text, suffix: '', alma: false };
+  if (sentAt < 0) {
+    const tailMatch = text.match(GA_TAIL_BLOCK_RE);
+    if (tailMatch && tailMatch.index > 0) {
+      return { prefix: '', human: text.slice(0, tailMatch.index), suffix: text.slice(tailMatch.index), alma: false };
+    }
+    return { prefix: '', human: text, suffix: '', alma: false };
+  }
   const sentAtEnd = text.indexOf(']', sentAt);
   if (sentAtEnd < 0) return { prefix: '', human: text, suffix: '', alma: false };
   let humanStart = sentAtEnd + 1;
@@ -92,35 +103,45 @@ function getHumanSlice(rawTurnText) {
 
 function replaceHumanSlice(rawTurnText, humanText) {
   const slice = getHumanSlice(rawTurnText);
-  return slice.alma ? `${slice.prefix}${humanText}${slice.suffix}` : humanText;
+  return (slice.prefix || slice.suffix) ? `${slice.prefix}${humanText}${slice.suffix}` : humanText;
+}
+
+function peelLeadingOverrides(source, knownPersonaIds) {
+  let rest = string(source);
+  const overrides = {};
+  for (let i = 0; i < 2; i += 1) {
+    const tokenMatch = rest.match(/^[ \t]*(\S+)([ \t]*\r?\n|[ \t]+|$)/);
+    if (!tokenMatch) break;
+    const token = tokenMatch[1];
+    const sep = tokenMatch[2] || '';
+    if (!overrides.personaId && knownPersonaIds.has(token)) overrides.personaId = token;
+    else if (!overrides.mode && MODES.has(token.toLowerCase())) overrides.mode = token.toLowerCase();
+    else break;
+    rest = rest.slice(tokenMatch[0].length);
+    if (sep.includes('\n')) break;
+  }
+  return { ...overrides, prompt: rest.replace(/^\r?\n+/, '').trimEnd() };
 }
 
 function parseDirectiveLine(text, knownPersonaIds) {
-  const match = text.match(/^\s*(\/route|@route)\b(?:\s+([\s\S]*))?$/i);
+  const match = text.match(/^\s*(\/route|@route)\b([ \t]*\r?\n|[ \t]+|$)([\s\S]*)$/i);
   if (!match) return null;
   const command = match[1].toLowerCase();
-  const rest = string(match[2]).trim();
+  const sep = match[2] || '';
+  const rest = string(match[3]);
   if (command === '/route') {
-    const commandMatch = rest.match(/^(on|off|once)\b(?:\s+([\s\S]*))?$/i);
+    if (!sep || sep.includes('\n')) return null;
+    const commandMatch = rest.match(/^(on|off|once)\b([ \t]*\r?\n|[ \t]+|$)([\s\S]*)$/i);
     if (!commandMatch) return null;
     const action = commandMatch[1].toLowerCase();
-    const args = string(commandMatch[2]).trim();
-    if (action === 'off') return { command: action, prompt: args };
-    const tokens = args ? args.split(/\s+/) : [];
-    const overrides = {};
-    if (tokens[0] && knownPersonaIds.has(tokens[0])) overrides.personaId = tokens.shift();
-    if (tokens[0] && MODES.has(tokens[0].toLowerCase())) overrides.mode = tokens.shift().toLowerCase();
-    if (!overrides.personaId && tokens[0] && MODES.has(tokens[0].toLowerCase())) overrides.mode = tokens.shift().toLowerCase();
-    if (!overrides.mode && tokens[0] && knownPersonaIds.has(tokens[0])) overrides.personaId = tokens.shift();
-    return { command: action, ...overrides, prompt: tokens.join(' ') };
+    const actionSep = commandMatch[2] || '';
+    const tail = string(commandMatch[3]);
+    if (action === 'off') return { command: action, prompt: tail.replace(/^\r?\n+/, '').trimEnd() };
+    if (!actionSep || actionSep.includes('\n')) return { command: action, prompt: tail.replace(/^\r?\n+/, '').trimEnd() };
+    return { command: action, ...peelLeadingOverrides(tail, knownPersonaIds) };
   }
-  const tokens = rest ? rest.split(/\s+/) : [];
-  const overrides = {};
-  if (tokens[0] && knownPersonaIds.has(tokens[0])) overrides.personaId = tokens.shift();
-  if (tokens[0] && MODES.has(tokens[0].toLowerCase())) overrides.mode = tokens.shift().toLowerCase();
-  if (!overrides.personaId && tokens[0] && MODES.has(tokens[0].toLowerCase())) overrides.mode = tokens.shift().toLowerCase();
-  if (!overrides.mode && tokens[0] && knownPersonaIds.has(tokens[0])) overrides.personaId = tokens.shift();
-  return { command, ...overrides, prompt: tokens.join(' ') };
+  if (!sep || sep.includes('\n')) return { command, prompt: rest.replace(/^\r?\n+/, '').trimEnd() };
+  return { command, ...peelLeadingOverrides(rest, knownPersonaIds) };
 }
 
 export function parseUserTurnDirective(rawTurnText, knownPersonaIds = []) {
@@ -141,15 +162,19 @@ export function parseUserTurnDirective(rawTurnText, knownPersonaIds = []) {
 
 export function reduceThreadDirectives(userTurns, knownPersonaIds = []) {
   const state = { enabled: true, mode: null, personaId: null, once: false };
+  let previousActiveMode = null;
   const turns = Array.isArray(userTurns) ? userTurns : [];
   const parsed = turns.map((turn, index) => {
     const result = parseUserTurnDirective(turn, knownPersonaIds);
     if (!result.matched) return result;
     if (result.command === 'on') {
       state.enabled = true;
-      state.mode = result.mode || state.mode;
+      const resumedMode = state.mode === 'off' ? previousActiveMode : state.mode;
+      state.mode = result.mode || resumedMode;
+      if (state.mode && state.mode !== 'off') previousActiveMode = state.mode;
       state.personaId = result.personaId || state.personaId;
     } else if (result.command === 'off') {
+      if (state.mode && state.mode !== 'off') previousActiveMode = state.mode;
       state.enabled = false;
       state.mode = 'off';
     } else if (index === turns.length - 1) {

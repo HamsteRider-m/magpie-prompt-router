@@ -163,3 +163,82 @@ test('engine work stays well under the host budget', () => {
   for (let index = 0; index < 1000; index += 1) decideRouteAction(envelope, { defaultMode: 'strict' });
   assert.ok(performance.now() - start < 1000);
 });
+
+test('extracts backticked GA workspace cwd without trailing parenthetical text', () => {
+  const gaSystem = '[T3 Workspace]\n- Active project working directory: `/Users/dev/my-app` (relative paths in file_read/file_write/file_patch and `code_run` default cwd resolve directly here).\n- Active role: `general`';
+  assert.equal(extractWorkspaceCwd(gaSystem), '/Users/dev/my-app');
+});
+
+test('preserves multi-line prompts, indentation, and GA injected tail blocks in directives', () => {
+  const multiline = parseUserTurnDirective('/route once custom suffix First line\n  indented second line', ['custom']);
+  assert.equal(multiline.matched, true);
+  assert.equal(multiline.personaId, 'custom');
+  assert.equal(multiline.mode, 'suffix');
+  assert.equal(multiline.text, 'First line\n  indented second line');
+
+  const line2Mode = parseUserTurnDirective('/route once\nstrict is a word', ['custom']);
+  assert.equal(line2Mode.matched, true);
+  assert.equal(line2Mode.mode, undefined);
+  assert.equal(line2Mode.text, 'strict is a word');
+
+  const gaTail = '\n\n<nmem_context>\nmemory line\n</nmem_context>\n\n[Role Instructions]\nStay focused.';
+  const gaOnce = parseUserTurnDirective(`/route once custom suffix Check line 1\n  line 2${gaTail}`, ['custom']);
+  assert.equal(gaOnce.matched, true);
+  assert.equal(gaOnce.personaId, 'custom');
+  assert.equal(gaOnce.mode, 'suffix');
+  assert.equal(gaOnce.text, `Check line 1\n  line 2${gaTail}`);
+
+  const gaBareOn = parseUserTurnDirective('/route on custom suffix\n\n<nmem_context>\nmemory\n</nmem_context>', ['custom']);
+  assert.equal(gaBareOn.matched, true);
+  assert.equal(gaBareOn.personaId, 'custom');
+  assert.equal(gaBareOn.mode, 'suffix');
+  assert.match(gaBareOn.text, /magpie-prompt-router: state -> enabled/);
+  assert.ok(gaBareOn.text.endsWith('\n\n<nmem_context>\nmemory\n</nmem_context>'));
+
+  const gaBareOff = parseUserTurnDirective('/route off\n\n<project_rules root="/tmp">\nrule 1\n</project_rules>', ['custom']);
+  assert.equal(gaBareOff.matched, true);
+  assert.equal(gaBareOff.command, 'off');
+  assert.match(gaBareOff.text, /magpie-prompt-router: state -> disabled/);
+  assert.ok(gaBareOff.text.endsWith('\n\n<project_rules root="/tmp">\nrule 1\n</project_rules>'));
+});
+
+test('bare /route on after /route off resumes prior mode, rule, or defaultMode without false enable', () => {
+  const personas = [{ id: 'arch', template: 'Arch' }];
+  const resumedSticky = decideRouteAction({
+    userText: '/route on',
+    userTurns: ['/route on arch replace', '/route off', '/route on']
+  }, { defaultMode: 'off', personas });
+  assert.equal(resumedSticky.mode, 'replace');
+  assert.equal(resumedSticky.personaId, 'arch');
+
+  const afterStickyResume = decideRouteAction({
+    userText: 'next question',
+    userTurns: ['/route on arch replace', '/route off', '/route on', 'next question']
+  }, { defaultMode: 'off', personas });
+  assert.equal(afterStickyResume.mode, 'replace');
+  assert.equal(afterStickyResume.personaId, 'arch');
+
+  const resumedDefault = decideRouteAction({
+    userText: '/route on',
+    userTurns: ['/route off', '/route on']
+  }, { defaultMode: 'replace', personas });
+  assert.equal(resumedDefault.mode, 'replace');
+
+  const resumedRule = decideRouteAction({
+    model: 'claude-sonnet-4',
+    userText: '/route on',
+    userTurns: ['/route off', '/route on']
+  }, {
+    defaultMode: 'off',
+    personas,
+    rules: [{ modelGlob: 'claude-*', mode: 'suffix', personaId: 'arch' }]
+  });
+  assert.equal(resumedRule.mode, 'suffix');
+  assert.equal(resumedRule.personaId, 'arch');
+
+  const explicitOff = decideRouteAction({
+    userText: '/route on off',
+    userTurns: ['/route off', '/route on off']
+  }, { defaultMode: 'replace', personas });
+  assert.equal(explicitOff.mode, 'off');
+});

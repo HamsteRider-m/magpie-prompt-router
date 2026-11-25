@@ -200,3 +200,52 @@ test('drops empty scrubbed Anthropic system blocks and keeps Responses secondary
   const responsesAppend = onRequest(responsesBody, context('responses', { options: { ...options, defaultMode: 'append' } }));
   assert.equal(responsesAppend.input[1].content[0].text, 'PERSONALITY: second');
 });
+
+test('chat suffix and strict preserve cache_control block identity for GA cache_guard', () => {
+  const cacheControl = { type: 'ephemeral' };
+  const body = {
+    model: 'claude-sonnet-4-6',
+    messages: [
+      { role: 'system', content: [{ type: 'text', text: 'Durable GA System', cache_control: cacheControl }] },
+      { role: 'user', content: 'Inspect repo' }
+    ]
+  };
+  const suffixOut = onRequest(body, context('chat', { options: { ...options, defaultMode: 'suffix' } }));
+  assert.equal(Array.isArray(suffixOut.messages[0].content), true);
+  assert.equal(suffixOut.messages[0].content.length, 2);
+  assert.equal(suffixOut.messages[0].content[0].text, 'Durable GA System');
+  assert.equal(suffixOut.messages[0].content[0].cache_control, cacheControl);
+  assert.match(suffixOut.messages[0].content[1].text, /Be concise\./);
+
+  const strictOut = onRequest(body, context('chat', { options: { ...options, defaultMode: 'strict' } }));
+  assert.equal(Array.isArray(strictOut.messages[0].content), true);
+  assert.equal(strictOut.messages[0].content.length, 1);
+  assert.equal(strictOut.messages[0].content[0].cache_control, cacheControl);
+  assert.match(strictOut.messages[0].content[0].text, /Be concise\./);
+});
+
+test('routes GA [T3 Workspace] requests by workspaceGlob and preserves multi-line /route once with <nmem_context>', () => {
+  const cacheControl = { type: 'ephemeral' };
+  const gaSys = 'Local Assistant\n[T3 Workspace]\n- Active project working directory: `/Users/dev/target-repo` (relative paths in file_read/file_write/file_patch and `code_run` default cwd resolve directly here).';
+  const gaUser = '/route once injector suffix Line one\n  indented line two\n\n<nmem_context>\nFact 1\n</nmem_context>';
+  const body = {
+    model: 'claude-sonnet-4-6',
+    messages: [
+      { role: 'system', content: [{ type: 'text', text: gaSys, cache_control: cacheControl }] },
+      { role: 'user', content: gaUser }
+    ]
+  };
+  const out = onRequest(body, context('chat', {
+    options: {
+      enabled: true,
+      defaultMode: 'off',
+      personas: [{ id: 'injector', template: 'Injected for {{cwd}}' }],
+      rules: [{ enabled: true, workspaceGlob: '/Users/dev/target-repo*', personaId: 'injector', mode: 'suffix' }]
+    }
+  }));
+  assert.ok(out);
+  assert.equal(out.messages[0].content[0].text, gaSys);
+  assert.equal(out.messages[0].content[0].cache_control, cacheControl);
+  assert.equal(out.messages[0].content[1].text, 'Injected for /Users/dev/target-repo');
+  assert.equal(out.messages[1].content, 'Line one\n  indented line two\n\n<nmem_context>\nFact 1\n</nmem_context>');
+});

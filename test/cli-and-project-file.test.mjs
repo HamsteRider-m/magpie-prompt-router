@@ -289,3 +289,73 @@ test('segmented prefix telemetry tracks cold -> none -> system breaks accurately
   assert.equal(recent[2].prefixBreakSegment, 'system');
   assert.notEqual(recent[2].prefixHash, recent[1].prefixHash);
 });
+
+test('CLI detects local checkout entry with custom directory name via package.json without duplicating plugin entries', () => {
+  const dir = mkTempDir('mpr-local-spec-');
+  const checkoutDir = path.join(dir, 'custom-router-checkout');
+  fs.mkdirSync(checkoutDir, { recursive: true });
+  fs.writeFileSync(path.join(checkoutDir, 'package.json'), JSON.stringify({ name: 'magpie-prompt-router', version: '0.1.0' }), 'utf8');
+  const configPath = path.join(dir, 'plugins.json');
+  fs.writeFileSync(configPath, JSON.stringify({
+    plugins: [
+      { spec: 'unrelated-plugin' },
+      { spec: checkoutDir, options: { enabled: true, defaultMode: 'off', rules: [] } }
+    ]
+  }, null, 2));
+
+  const runCli = (args) => execFileSync(process.execPath, [cliPath, ...args], { encoding: 'utf8' });
+  const status = JSON.parse(runCli(['status', '--config', configPath]));
+  assert.equal(status.installed, true);
+  assert.equal(status.spec, checkoutDir);
+
+  runCli(['persona', 'add', 'inj', '--template', 'Injected', '--config', configPath]);
+  const saved = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+  assert.equal(saved.plugins.length, 2);
+  assert.equal(saved.plugins[1].spec, checkoutDir);
+  assert.equal(saved.plugins[1].options.personas[0].id, 'inj');
+});
+
+test('bare /route on after /route off immediately resumes .prompt-router.md', () => {
+  const dir = mkTempDir('mpr-resume-proj-');
+  fs.writeFileSync(path.join(dir, PROJECT_CONFIG_FILENAME), `---\nmode: replace\n---\nRepo guide`, 'utf8');
+  const opts = { enabled: true, defaultMode: 'off' };
+
+  const suppressed = onRequest({
+    model: 'claude-sonnet-4',
+    cwd: dir,
+    messages: [
+      { role: 'system', content: 'Host prompt' },
+      { role: 'user', content: '/route off' }
+    ]
+  }, { protocol: 'chat', options: opts });
+  assert.ok(suppressed);
+  assert.equal(suppressed.messages[0].content, 'Host prompt');
+
+  const resumed = onRequest({
+    model: 'claude-sonnet-4',
+    cwd: dir,
+    messages: [
+      { role: 'system', content: 'Host prompt' },
+      { role: 'user', content: '/route off' },
+      { role: 'assistant', content: 'Disabled.' },
+      { role: 'user', content: '/route on' }
+    ]
+  }, { protocol: 'chat', options: opts });
+  assert.ok(resumed);
+  assert.match(resumed.messages[0].content, /Repo guide/);
+
+  const followUp = onRequest({
+    model: 'claude-sonnet-4',
+    cwd: dir,
+    messages: [
+      { role: 'system', content: 'Host prompt' },
+      { role: 'user', content: '/route off' },
+      { role: 'assistant', content: 'Disabled.' },
+      { role: 'user', content: '/route on' },
+      { role: 'assistant', content: 'Enabled.' },
+      { role: 'user', content: 'Explain this module' }
+    ]
+  }, { protocol: 'chat', options: opts });
+  assert.ok(followUp);
+  assert.match(followUp.messages[0].content, /Repo guide/);
+});

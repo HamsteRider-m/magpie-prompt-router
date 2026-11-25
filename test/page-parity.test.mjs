@@ -58,3 +58,48 @@ test('page simulator matches engine decisions across seventeen wire cases', () =
   ];
   cases.forEach(([envelope, options]) => compare(envelope, options));
 });
+
+test('page simulator matches engine on GA-wrapped /route on and multi-line /route once turns', () => {
+  const opts = { defaultMode: 'off', personas: [{ id: 'inj', template: 'Inject' }] };
+  const gaOn = '/route on inj suffix\n\n<nmem_context>\nfact\n</nmem_context>';
+  compare({
+    model: 'claude',
+    agent: 'main',
+    cwd: '/workspace/app',
+    protocol: 'chat',
+    systemText: '[T3 Workspace]\n- Active project working directory: `/workspace/app`',
+    userText: gaOn,
+    userTurns: [gaOn]
+  }, opts);
+
+  const gaMultiOnce = '/route once\nstrict is not a mode\n\n[Role Instructions]\nStay brief.';
+  compare({
+    model: 'claude',
+    agent: 'main',
+    cwd: '/workspace/app',
+    protocol: 'chat',
+    systemText: '[T3 Workspace]\n- Active project working directory: `/workspace/app`',
+    userText: gaMultiOnce,
+    userTurns: [gaMultiOnce]
+  }, opts);
+
+  compare({
+    model: 'claude',
+    agent: 'main',
+    cwd: '/workspace/app',
+    protocol: 'chat',
+    systemText: '[T3 Workspace]\n- Active project working directory: `/workspace/app`',
+    userText: '/route on',
+    userTurns: ['/route on inj suffix', '/route off', '/route on']
+  }, opts);
+
+  compare({
+    model: 'claude',
+    agent: 'main',
+    cwd: '/workspace/app',
+    protocol: 'chat',
+    systemText: '[T3 Workspace]\n- Active project working directory: `/workspace/app`',
+    userText: '/route on',
+    userTurns: ['/route off', '/route on']
+  }, { ...opts, defaultMode: 'replace' });
+});
